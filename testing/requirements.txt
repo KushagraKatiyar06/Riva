@@ -1,0 +1,5 @@
+# Temporary requirements for the GTM scraper test
+firecrawl-py
+python-dotenv
+google-generativeai
+rich
