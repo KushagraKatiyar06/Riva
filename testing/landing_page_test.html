@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RIVA | Sentient Intelligence</title>
+    <style>
+        :root {
+            --riva-cyan: #00ffff;
+            --comp-red: #ff3333;
+            --bg-dark: #050a15;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: white;
+            font-family: 'Inter', -apple-system, sans-serif;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        /* --- Hero Container --- */
+        .hero {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: radial-gradient(circle at center, #111d35 0%, var(--bg-dark) 80%);
+        }
+
+        h1 {
+            font-size: 5rem;
+            letter-spacing: 15px;
+            margin: 0;
+            opacity: 0.8;
+            font-weight: 200;
+            text-transform: uppercase;
+        }
+
+        /* --- Dual Eye Display --- */
+        .eye-display {
+            display: flex;
+            gap: 100px;
+            margin-top: 40px;
+        }
+
+        .eye-container { width: 280px; }
+        .pupil-group { transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .eyelid { transition: transform 0.15s ease-in-out; transform: translateY(-100%); }
+        .glow-riva { filter: drop-shadow(0 0 10px var(--riva-cyan)); }
+        .glow-comp { filter: drop-shadow(0 0 10px var(--comp-red)); }
+
+        /* --- THE SMILE CTA (Minimalist) --- */
+        .cta-wrapper {
+            margin-top: 50px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+            /* Solution 1: Still breathing via shadow and scale */
+            animation: breath 4s infinite ease-in-out;
+        }
+
+        @keyframes breath {
+            0%, 100% { transform: scale(1); filter: drop-shadow(0 0 5px rgba(0, 255, 255, 0.2)); }
+            50% { transform: scale(1.05); filter: drop-shadow(0 0 15px rgba(0, 255, 255, 0.5)); }
+        }
+
+        .cta-wrapper:hover {
+            animation: none;
+            transform: scale(1.1);
+        }
+
+        #smile-svg {
+            width: 220px;
+            overflow: visible;
+        }
+
+        .smile-path {
+            stroke: var(--riva-cyan);
+            stroke-width: 3px;
+            stroke-linecap: round;
+            fill: none;
+            transition: stroke-width 0.3s, stroke 0.3s;
+        }
+
+        .cta-text {
+            color: var(--riva-cyan);
+            font-size: 0.75rem;
+            font-weight: bold;
+            letter-spacing: 5px;
+            text-transform: uppercase;
+            margin-top: 10px;
+            opacity: 0.7;
+            transition: opacity 0.3s, letter-spacing 0.3s, text-shadow 0.3s;
+        }
+
+        .cta-wrapper:hover .cta-text {
+            opacity: 1;
+            letter-spacing: 7px;
+            text-shadow: 0 0 10px var(--riva-cyan);
+        }
+
+        .cta-wrapper:hover .smile-path {
+            stroke-width: 5px;
+            stroke: #fff; /* Flashes white on hover for "click me" feedback */
+        }
+    </style>
+</head>
+<body>
+
+    <section class="hero">
+        <h1>RIVA</h1>
+        
+        <div class="eye-display">
+            <div class="eye-container">
+                <svg viewBox="0 0 200 120">
+                    <defs>
+                        <clipPath id="eye-clip"><path d="M10,60 Q100,-15 190,60 Q100,135 10,60" /></clipPath>
+                    </defs>
+                    <g clip-path="url(#eye-clip)">
+                        <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" fill="#e0f7fa" />
+                        <g id="riva-pupil" class="pupil-group">
+                            <circle cx="100" cy="60" r="28" fill="#002233" />
+                            <circle id="riva-glow" class="glow-riva" cx="100" cy="60" r="10" fill="#00ffff" />
+                        </g>
+                        <rect id="riva-lid" class="eyelid" width="200" height="120" fill="#1a2a4a" />
+                    </g>
+                    <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#00ffff" stroke-width="2" opacity="0.2"/>
+                </svg>
+            </div>
+
+            <div class="eye-container">
+                <svg viewBox="0 0 200 120">
+                    <g clip-path="url(#eye-clip)">
+                        <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" fill="#fbe9e7" />
+                        <g id="comp-pupil" class="pupil-group">
+                            <circle cx="100" cy="60" r="28" fill="#330000" />
+                            <circle id="comp-glow" class="glow-comp" cx="100" cy="60" r="10" fill="#ff3333" />
+                        </g>
+                        <rect id="comp-lid" class="eyelid" width="200" height="120" fill="#2a1a1a" />
+                    </g>
+                    <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#ff3333" stroke-width="2" opacity="0.2"/>
+                </svg>
+            </div>
+        </div>
+
+        <div class="cta-wrapper" id="cta-main" onclick="alert('Accessing Nexus...')">
+            <svg id="smile-svg" viewBox="0 0 200 60">
+                <path id="magnetic-smile" class="smile-path" d="M20,10 Q100,50 180,10" />
+            </svg>
+            <div class="cta-text">Enter Nexus</div>
+        </div>
+    </section>
+
+    <script>
+        const rivaPupil = document.getElementById('riva-pupil');
+        const compPupil = document.getElementById('comp-pupil');
+        const rivaLid = document.getElementById('riva-lid');
+        const compLid = document.getElementById('comp-lid');
+        const smilePath = document.getElementById('magnetic-smile');
+        const ctaWrapper = document.getElementById('cta-main');
+
+        function blink(lid) {
+            lid.style.transform = "translateY(0%)";
+            setTimeout(() => lid.style.transform = "translateY(-100%)", 150);
+        }
+
+        // --- SENTIENT EYES LOOP ---
+        function sentientLoop(pupil, lid) {
+            const x = (Math.random() - 0.5) * 50;
+            const y = (Math.random() - 0.5) * 30;
+            pupil.style.transform = `translate(${x}px, ${y}px)`;
+            if (Math.random() > 0.8) blink(lid);
+            setTimeout(() => sentientLoop(pupil, lid), Math.random() * 2000 + 800);
+        }
+
+        // --- MAGNETIC SMILE LOGIC ---
+        document.addEventListener('mousemove', (e) => {
+            const rect = ctaWrapper.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            
+            const dist = Math.hypot(e.clientX - centerX, e.clientY - centerY);
+            
+            if (dist < 400) {
+                const moveX = (e.clientX - centerX) / 12;
+                const moveY = (e.clientY - centerY) / 8;
+                smilePath.setAttribute('d', `M20,10 Q${100 + moveX},${50 + moveY} 180,10`);
+            } else {
+                smilePath.setAttribute('d', `M20,10 Q100,50 180,10`);
+            }
+        });
+
+        window.onload = () => {
+            sentientLoop(rivaPupil, rivaLid);
+            setTimeout(() => sentientLoop(compPupil, compLid), 400);
+        };
+    </script>
+</body>
+</html>
