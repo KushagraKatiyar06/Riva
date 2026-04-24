@@ -230,7 +230,11 @@ function DashboardContent() {
   useEffect(() => {
     if (!targetUrl) return;
 
-    const ws = new WebSocket('ws://localhost:8000/ws/browse');
+    // Dev: wrangler dev --remote runs on 8787
+    // Prod: set NEXT_PUBLIC_WORKER_URL=riva-worker.your-subdomain.workers.dev
+    const workerHost = process.env.NEXT_PUBLIC_WORKER_URL ?? 'localhost:8787';
+    const wsProtocol = workerHost.startsWith('localhost') ? 'ws' : 'wss';
+    const ws = new WebSocket(`${wsProtocol}://${workerHost}/ws/browse`);
     wsRef.current = ws;
     ws.onopen = () => {
       setWsState('open');

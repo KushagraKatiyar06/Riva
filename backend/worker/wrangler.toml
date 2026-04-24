@@ -1,0 +1,18 @@
+name = "riva-worker"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Cloudflare-managed Chrome
+[browser]
+binding = "BROWSER"
+
+# Each browser session gets its own isolated Durable Object instance
+[[durable_objects.bindings]]
+name = "SESSION"
+class_name = "SessionDO"
+
+# Required: tells Cloudflare to create the DO class on first deploy
+[[migrations]]
+tag = "v1"
+new_classes = ["SessionDO"]
