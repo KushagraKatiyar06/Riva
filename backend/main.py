@@ -5,6 +5,7 @@ import threading
 import queue as tqueue
 import json
 import os
+import re
 import uuid
 import sqlite3
 import concurrent.futures
@@ -16,6 +17,25 @@ from google import genai
 
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+EXTRACTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'testing', 'extracts')
+
+def save_extract(domain: str, intel_type: str, url: str, content: str) -> str:
+    """Write extracted page content to testing/extracts/{domain}/{type}_{ts}.txt. Returns filepath."""
+    folder = os.path.join(EXTRACTS_DIR, domain)
+    os.makedirs(folder, exist_ok=True)
+    ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    # make filename URL-path-friendly
+    slug = re.sub(r'[^a-zA-Z0-9_-]', '_', urlparse(url).path.strip('/'))[:60] or 'index'
+    filename = f"{intel_type}_{ts}_{slug}.txt"
+    filepath = os.path.join(folder, filename)
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(f"URL      : {url}\n")
+        f.write(f"Type     : {intel_type}\n")
+        f.write(f"Captured : {datetime.utcnow().isoformat()}\n")
+        f.write("=" * 80 + "\n\n")
+        f.write(content)
+    return filepath
 
 # ---------------------------------------------------------------------------
 # Database
@@ -233,6 +253,70 @@ Page text:
                         thought(f"Brain error: {e}", "info")
                         return {"goal": "SURVEY", "thought": "Brain error"}
 
+            def full_page_extract(page) -> str:
+                """Scroll to top then incrementally to the bottom, return full innerText."""
+                page.evaluate("window.scrollTo(0, 0)")
+                page.wait_for_timeout(400)
+                prev_height = -1
+                for _ in range(40):  # cap at 40 scroll steps
+                    page.evaluate("window.scrollBy(0, 800)")
+                    page.wait_for_timeout(350)
+                    new_height = page.evaluate("document.documentElement.scrollHeight")
+                    if new_height == prev_height:
+                        break
+                    prev_height = new_height
+                return page.evaluate("() => document.body.innerText")
+
+            def crawl_docs(page, landing_url: str, domain: str) -> int:
+                """Extract the landing docs page + up to 25 linked sub-pages. Returns page count."""
+                # Step 1 — extract the landing page itself
+                text = full_page_extract(page)
+                fp   = save_extract(domain, "docs", landing_url, text)
+                save_intel("docs", landing_url, text)
+                thought(f"Docs page 1 saved ({len(text):,} chars)", "found")
+
+                # Step 2 — collect internal links that look like sub-pages
+                base_path = '/' + landing_url.split('/', 3)[-1].split('/')[0] if '/' in landing_url.split('://', 1)[-1] else ''
+                links: list[str] = page.evaluate(f"""() => {{
+                    const host = window.location.hostname;
+                    const basePath = window.location.pathname.split('/').slice(0, 3).join('/');
+                    return [...new Set(
+                        Array.from(document.querySelectorAll('a[href]'))
+                            .map(a => a.href)
+                            .filter(href => {{
+                                try {{
+                                    const u = new URL(href);
+                                    return u.hostname === host
+                                        && u.pathname !== window.location.pathname
+                                        && !u.hash
+                                        && (u.pathname.startsWith(basePath) || basePath === '');
+                                }} catch {{ return false; }}
+                            }})
+                    )].slice(0, 25);
+                }}""")
+
+                count = 1
+                visited = {landing_url}
+                for link in links:
+                    if stop_event.is_set():
+                        break
+                    if link in visited:
+                        continue
+                    try:
+                        thought(f"Docs crawl {count+1}: {link}", "navigating")
+                        page.goto(link, wait_until="domcontentloaded", timeout=12000)
+                        page.wait_for_timeout(600)
+                        text = full_page_extract(page)
+                        save_extract(domain, "docs", link, text)
+                        save_intel("docs", link, text)
+                        visited.add(link)
+                        count += 1
+                    except Exception as e:
+                        thought(f"Docs crawl skip: {e}", "info")
+
+                thought(f"Docs crawl complete — {count} pages saved.", "found")
+                return count
+
             def handle_gestures(page):
                 while not action_q.empty():
                     act = action_q.get_nowait()
@@ -307,16 +391,17 @@ Page text:
                         curr_lower = curr_url.lower()
                         progress   = False
 
+                        domain = urlparse(curr_url).hostname or "unknown"
+
                         if not objectives["pricing"] and any(
                             k in curr_lower for k in ["pricing", "plans", "tier"]
                         ):
-                            thought("Milestone: Pricing page captured.", "found")
-                            page.wait_for_timeout(1200)
-                            for _ in range(3):
-                                page.evaluate("window.scrollBy(0, 400)")
-                                page.wait_for_timeout(600)
-                            content = page.evaluate("() => document.body.innerText")
+                            thought("Milestone: Pricing page found — extracting full content.", "found")
+                            page.wait_for_timeout(800)
+                            content = full_page_extract(page)
                             save_intel("pricing", curr_url, content)
+                            save_extract(domain, "pricing", curr_url, content)
+                            thought(f"Pricing saved ({len(content):,} chars).", "found")
                             objectives["pricing"] = True
                             progress = True
                             page.goto(target_url, wait_until="domcontentloaded")
@@ -325,13 +410,9 @@ Page text:
                             k in curr_lower for k in ["docs", "documentation", "api", "guide", "developer"]
                         ):
                             if curr_url != target_url:
-                                thought("Milestone: Documentation located.", "found")
-                                page.wait_for_timeout(1200)
-                                for _ in range(3):
-                                    page.evaluate("window.scrollBy(0, 400)")
-                                    page.wait_for_timeout(600)
-                                content = page.evaluate("() => document.body.innerText")
-                                save_intel("docs", curr_url, content)
+                                thought("Milestone: Docs found — crawling sub-pages.", "found")
+                                page.wait_for_timeout(800)
+                                crawl_docs(page, curr_url, domain)
                                 objectives["docs"] = True
                                 progress = True
 

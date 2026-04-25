@@ -80,8 +80,11 @@ export default function Home() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!rivaUrl.trim() || !compUrl.trim()) return;
-    router.push(`/dashboard?riva=${encodeURIComponent(rivaUrl.trim())}&comp=${encodeURIComponent(compUrl.trim())}`);
+    if (!rivaUrl.trim() && !compUrl.trim()) return;
+    const params = new URLSearchParams();
+    if (rivaUrl.trim()) params.set('riva', rivaUrl.trim());
+    if (compUrl.trim()) params.set('comp', compUrl.trim());
+    router.push(`/dashboard?${params.toString()}`);
   }
 
   return (
@@ -251,8 +254,9 @@ export default function Home() {
 
             {/* Competitor — red */}
             <div>
-              <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase" style={{ color: '#ff3333', opacity: 0.6 }}>
+              <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase flex items-center gap-2" style={{ color: '#ff3333', opacity: 0.6 }}>
                 Competitor
+                <span className="text-white/20 normal-case tracking-normal font-normal">(optional)</span>
               </div>
               <div
                 className="flex items-center border rounded-lg px-4 py-3 gap-3"
@@ -280,7 +284,7 @@ export default function Home() {
                 border: '1px solid rgba(0,255,255,0.4)',
                 color: '#00ffff',
                 boxShadow: '0 0 20px rgba(0,255,255,0.1)',
-                opacity: rivaUrl.trim() && compUrl.trim() ? 1 : 0.4,
+                opacity: rivaUrl.trim() || compUrl.trim() ? 1 : 0.4,
               }}
               onMouseEnter={e => {
                 (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 30px rgba(0,255,255,0.3)';
