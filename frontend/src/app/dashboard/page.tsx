@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Shield, Play, Pause, ArrowRight, ExternalLink } from 'lucide-react';
+import { Shield, Play, Pause, ArrowRight } from 'lucide-react';
 
 type Thought = { text: string; state: string; ts: string };
 
@@ -43,34 +43,28 @@ function ThoughtLog({ thoughts, label, color }: { thoughts: Thought[]; label: st
 
 function BrowserPanel({ label, color, frameSrc, active, status, isPaused, onTogglePause, onInteraction, onGoto }: any) {
   const [manualUrl, setManualUrl] = useState('');
-  const lastMoveRef = useRef(0);
 
-  function handleMouse(e: any, type: string) {
-    if (!active || !frameSrc || !isPaused) return;
+  function handleClick(e: any) {
+    if (!active || !frameSrc) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) / rect.width;
     const y = (e.clientY - rect.top) / rect.height;
-
-    if (type === 'mousemove') {
-      const now = Date.now();
-      if (now - lastMoveRef.current < 80) return;
-      lastMoveRef.current = now;
-    }
-    onInteraction(type, x, y);
+    onInteraction?.('click', x, y);
   }
 
-  function handleWheel(e: any) {
-    if (!active || !frameSrc || !isPaused) return;
-    onInteraction('scroll', 0, 0, e.deltaY);
+  function submitGoto() {
+    if (!manualUrl.trim()) return;
+    onGoto?.(manualUrl.trim());
+    setManualUrl('');
   }
 
   return (
     <div className="flex flex-col rounded-b-lg overflow-hidden flex-1 border border-white/5 bg-[#020609]">
       <div className="flex items-center gap-2 px-3 py-2 bg-[#08111f] border-b border-white/5">
-        <button 
+        <button
           onClick={onTogglePause}
-          className="flex items-center gap-1.5 px-3 py-1 rounded font-bold text-[9px] tracking-widest transition-all"
-          style={{ 
+          className="flex items-center gap-1.5 px-3 py-1 rounded font-bold text-[9px] tracking-widest transition-all shrink-0"
+          style={{
             background: isPaused ? 'rgba(255,204,0,0.2)' : 'rgba(0,255,255,0.1)',
             color: isPaused ? '#ffcc00' : '#00ffff',
             border: `1px solid ${isPaused ? '#ffcc00' : '#00ffff'}44`
@@ -79,38 +73,35 @@ function BrowserPanel({ label, color, frameSrc, active, status, isPaused, onTogg
           {isPaused ? <Play size={10} fill="currentColor"/> : <Pause size={10} fill="currentColor" />}
           {isPaused ? 'RESUME' : 'PAUSE'}
         </button>
-        
-        {isPaused ? (
-          <div className="flex-1 flex gap-2">
-            <input 
-              className="flex-1 bg-black/40 border border-white/10 rounded px-2 py-1 text-[9px] text-[#00ffff] font-mono outline-none"
-              placeholder="Enter URL to redirect..."
-              value={manualUrl}
-              onChange={e => setManualUrl(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && (onGoto(manualUrl), setManualUrl(''))}
-            />
-            <button onClick={() => {onGoto(manualUrl); setManualUrl('');}} className="p-1 hover:text-[#00ffff]"><ArrowRight size={12}/></button>
-          </div>
-        ) : (
-          <div className="flex-1 text-[9px] bg-black/20 text-white/30 px-3 py-1 rounded truncate font-mono text-center">
-            {status || 'WAITING...'}
-          </div>
-        )}
+
+        <div className="flex-1 flex gap-2">
+          <input
+            className="flex-1 bg-black/40 border border-white/10 rounded px-2 py-1 text-[9px] text-[#00ffff] font-mono outline-none"
+            placeholder="Paste URL to navigate..."
+            value={manualUrl}
+            onChange={e => setManualUrl(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submitGoto(); } }}
+          />
+          <button
+            onClick={submitGoto}
+            className="p-1 shrink-0 text-white/30 hover:text-[#00ffff] transition-colors"
+          >
+            <ArrowRight size={12}/>
+          </button>
+        </div>
       </div>
 
-      <div 
+      <div
         className="relative flex-1 bg-black flex items-center justify-center overflow-hidden"
-        style={{ cursor: isPaused ? 'crosshair' : 'wait' }}
-        onMouseMove={e => handleMouse(e, 'mousemove')}
-        onClick={e => handleMouse(e, 'click')}
-        onWheel={handleWheel}
+        onClick={handleClick}
+        style={{ cursor: active && frameSrc ? 'crosshair' : 'default' }}
       >
         {frameSrc ? (
           <img src={frameSrc} className="w-full h-full object-contain pointer-events-none select-none" alt="preview" />
         ) : (
           <div className="text-white/5 text-[10px] tracking-[4px] uppercase">{label} OFFLINE</div>
         )}
-        
+
         {isPaused && (
           <div className="absolute inset-0 border-2 border-yellow-500/20 pointer-events-none shadow-[inset_0_0_80px_rgba(234,179,8,0.1)]" />
         )}
@@ -153,9 +144,9 @@ function DashboardContent() {
     return () => ws.close();
   }, [targetUrl]);
 
-  function handleInteraction(type: string, x: number, y: number, deltaY = 0) {
+  function handleInteraction(type: string, x: number, y: number) {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type, x, y, deltaY }));
+      wsRef.current.send(JSON.stringify({ type, x, y }));
     }
   }
 
