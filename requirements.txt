@@ -4,3 +4,4 @@ playwright
 python-dotenv
 google-genai
 requests
+beautifulsoup4
