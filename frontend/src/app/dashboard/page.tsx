@@ -2,9 +2,8 @@
 
 import { useEffect, useRef, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Shield } from 'lucide-react';
+import { Shield, Play, Pause, ArrowRight, ExternalLink } from 'lucide-react';
 
-// ── Types ────────────────────────────────────────────────────
 type Thought = { text: string; state: string; ts: string };
 
 const STATE_COLORS: Record<string, string> = {
@@ -17,218 +16,104 @@ const STATE_COLORS: Record<string, string> = {
   hitl:       '#ff4466',
   complete:   '#00ff88',
   error:      '#ff3333',
+  user:       '#ffffff',
 };
 
-const STATE_ICONS: Record<string, string> = {
-  info:       '·',
-  navigating: '→',
-  scanning:   '◎',
-  found:      '✓',
-  hovering:   '⌖',
-  clicking:   '↵',
-  hitl:       '⊕',
-  complete:   '★',
-  error:      '✗',
-};
-
-// ── Thought Log ──────────────────────────────────────────────
 function ThoughtLog({ thoughts, label, color }: { thoughts: Thought[]; label: string; color: string }) {
   const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [thoughts]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [thoughts]);
 
   return (
-    <div
-      className="flex flex-col h-48 overflow-y-auto rounded-t-lg border-b"
-      style={{
-        background: '#020609',
-        borderColor: `${color}22`,
-        fontFamily: "'Geist Mono', 'Courier New', monospace",
-      }}
-    >
-      <div
-        className="flex items-center gap-2 px-3 py-1.5 border-b text-xs font-bold tracking-[3px] uppercase sticky top-0"
-        style={{ background: '#030810', borderColor: `${color}22`, color }}
-      >
-        <span style={{ opacity: 0.5 }}>◈</span>
-        <span>{label} — THOUGHT STREAM</span>
+    <div className="flex flex-col h-40 overflow-y-auto rounded-t-lg border-b bg-[#020609] border-white/5 font-mono">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b text-[9px] font-bold tracking-[3px] uppercase sticky top-0 bg-[#030810]" style={{ color }}>
+        <span>◈</span> {label} STREAM
       </div>
-
       <div className="flex-1 px-3 py-2 space-y-0.5">
-        {thoughts.length === 0 ? (
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.2)' }}>Waiting for agent...</p>
-        ) : (
-          thoughts.map((t, i) => (
-            <div key={i} className="flex items-start gap-2 text-xs leading-5">
-              <span className="shrink-0 mt-0.5" style={{ color: STATE_COLORS[t.state] ?? '#aaa', width: 12 }}>
-                {STATE_ICONS[t.state] ?? '·'}
-              </span>
-              <span className="shrink-0" style={{ color: 'rgba(255,255,255,0.25)', fontSize: 10 }}>
-                {t.ts}
-              </span>
-              <span style={{ color: STATE_COLORS[t.state] ?? '#ccc' }}>{t.text}</span>
-            </div>
-          ))
-        )}
+        {thoughts.map((t, i) => (
+          <div key={i} className="flex items-start gap-2 text-[10px] leading-5">
+            <span className="shrink-0 text-white/20">[{t.ts}]</span>
+            <span style={{ color: STATE_COLORS[t.state] ?? '#ccc' }}>{t.text}</span>
+          </div>
+        ))}
         <div ref={bottomRef} />
       </div>
     </div>
   );
 }
 
-// ── Browser Panel ────────────────────────────────────────────
-function BrowserPanel({
-  label,
-  color,
-  frameSrc,
-  active,
-  onCanvasClick,
-  status,
-}: {
-  label: string;
-  color: string;
-  frameSrc: string;
-  active: boolean;
-  onCanvasClick?: (x: number, y: number) => void;
-  status: string;
-}) {
-  function handleClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (!onCanvasClick || !frameSrc) return;
+function BrowserPanel({ label, color, frameSrc, active, status, isPaused, onTogglePause, onInteraction, onGoto }: any) {
+  const [manualUrl, setManualUrl] = useState('');
+  const lastMoveRef = useRef(0);
+
+  function handleMouse(e: any, type: string) {
+    if (!active || !frameSrc || !isPaused) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) / rect.width;
     const y = (e.clientY - rect.top) / rect.height;
-    onCanvasClick(x, y);
+
+    if (type === 'mousemove') {
+      const now = Date.now();
+      if (now - lastMoveRef.current < 80) return;
+      lastMoveRef.current = now;
+    }
+    onInteraction(type, x, y);
+  }
+
+  function handleWheel(e: any) {
+    if (!active || !frameSrc || !isPaused) return;
+    onInteraction('scroll', 0, 0, e.deltaY);
   }
 
   return (
-    <div
-      className="flex flex-col rounded-b-lg overflow-hidden flex-1"
-      style={{ border: `1px solid ${color}22`, borderTop: 'none' }}
-    >
-      <div
-        className="flex items-center gap-2 px-3 py-2 border-b"
-        style={{ background: '#08111f', borderColor: `${color}22` }}
-      >
-        <div className="flex gap-1.5">
-          <div className="w-3 h-3 rounded-full" style={{ background: '#ff5f56' }} />
-          <div className="w-3 h-3 rounded-full" style={{ background: '#ffbd2e' }} />
-          <div className="w-3 h-3 rounded-full" style={{ background: '#27c93f' }} />
-        </div>
-        <div
-          className="flex-1 text-xs rounded px-2 py-0.5 mx-2"
-          style={{ background: '#040b16', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}
+    <div className="flex flex-col rounded-b-lg overflow-hidden flex-1 border border-white/5 bg-[#020609]">
+      <div className="flex items-center gap-2 px-3 py-2 bg-[#08111f] border-b border-white/5">
+        <button 
+          onClick={onTogglePause}
+          className="flex items-center gap-1.5 px-3 py-1 rounded font-bold text-[9px] tracking-widest transition-all"
+          style={{ 
+            background: isPaused ? 'rgba(255,204,0,0.2)' : 'rgba(0,255,255,0.1)',
+            color: isPaused ? '#ffcc00' : '#00ffff',
+            border: `1px solid ${isPaused ? '#ffcc00' : '#00ffff'}44`
+          }}
         >
-          {active ? (status.length > 50 ? status.slice(0, 50) + '…' : status) : '—'}
-        </div>
-        <div
-          className="text-xs font-bold tracking-[2px] uppercase px-2"
-          style={{ color, opacity: active ? 1 : 0.3 }}
-        >
-          {label}
-        </div>
-      </div>
-
-      <div
-        className="relative flex-1 flex items-center justify-center"
-        style={{ background: '#020609', cursor: active && frameSrc ? 'crosshair' : 'default', minHeight: 0 }}
-        onClick={handleClick}
-      >
-        {frameSrc ? (
-          <img src={frameSrc} alt="preview" className="w-full h-full object-contain block" draggable={false} />
+          {isPaused ? <Play size={10} fill="currentColor"/> : <Pause size={10} fill="currentColor" />}
+          {isPaused ? 'RESUME' : 'PAUSE'}
+        </button>
+        
+        {isPaused ? (
+          <div className="flex-1 flex gap-2">
+            <input 
+              className="flex-1 bg-black/40 border border-white/10 rounded px-2 py-1 text-[9px] text-[#00ffff] font-mono outline-none"
+              placeholder="Enter URL to redirect..."
+              value={manualUrl}
+              onChange={e => setManualUrl(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && (onGoto(manualUrl), setManualUrl(''))}
+            />
+            <button onClick={() => {onGoto(manualUrl); setManualUrl('');}} className="p-1 hover:text-[#00ffff]"><ArrowRight size={12}/></button>
+          </div>
         ) : (
-          <p className="text-xs tracking-widest uppercase opacity-20" style={{ color }}>{label} OFFLINE</p>
+          <div className="flex-1 text-[9px] bg-black/20 text-white/30 px-3 py-1 rounded truncate font-mono text-center">
+            {status || 'WAITING...'}
+          </div>
         )}
       </div>
-    </div>
-  );
-}
 
-// ── Dashboard Content ─────────────────────────────────────────
-function DashboardContent() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const targetUrl = searchParams.get('url') || '';
-
-  const [rivaThoughts, setRivaThoughts] = useState<Thought[]>([]);
-  const [compThoughts, setCompThoughts] = useState<Thought[]>([]);
-
-  const [rivaFrame, setRivaFrame] = useState<string>('');
-  const [rivaStatus, setRivaStatus] = useState<string>(targetUrl);
-  const [wsState, setWsState] = useState<'connecting' | 'open' | 'closed'>('connecting');
-
-  const wsRef = useRef<WebSocket | null>(null);
-
-  function now() { return new Date().toLocaleTimeString('en-US', { hour12: false }); }
-
-  useEffect(() => {
-    setCompThoughts([{ text: 'Awaiting second URL input.', state: 'info', ts: now() }]);
-  }, []);
-
-  function addThought(text: string, state: string) {
-    setRivaThoughts(prev => [...prev, { text, state, ts: now() }]);
-  }
-
-  useEffect(() => {
-    if (!targetUrl) return;
-    const ws = new WebSocket(`ws://localhost:8000/ws/browse`);
-    wsRef.current = ws;
-    let hasConnected = false;
-
-    ws.onopen = () => {
-      hasConnected = true;
-      setWsState('open');
-      ws.send(JSON.stringify({ url: targetUrl }));
-    };
-
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'frame') setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
-        else if (msg.type === 'thought') addThought(msg.text, msg.state);
-      } catch {}
-    };
-
-    ws.onclose = () => setWsState('closed');
-    ws.onerror = () => { if (!hasConnected) addThought('Connecting to agent...', 'info'); };
-
-    return () => ws.close();
-  }, [targetUrl]);
-
-  function handleRivaClick(x: number, y: number) {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'click', x, y }));
-    }
-  }
-
-  return (
-    <div className="h-screen flex flex-col bg-[#050a15] text-white overflow-hidden">
-      <header className="flex items-center justify-between px-6 py-3 border-b border-white/5 bg-[#030810]">
-        <button onClick={() => router.push('/')} className="flex items-center gap-2">
-          <Shield size={18} color="#00ffff" />
-          <span className="font-bold tracking-[8px] uppercase">RIVA</span>
-        </button>
-        <div className="text-[10px] font-mono text-[#00ffff] opacity-50 truncate max-w-[40%]">
-          TARGET: {targetUrl}
-        </div>
-        <div className="flex items-center gap-2 text-xs font-bold uppercase opacity-40">
-           <div className={`w-2 h-2 rounded-full ${wsState === 'open' ? 'bg-green-500' : 'bg-red-500'}`} />
-           {wsState}
-        </div>
-      </header>
-
-      <div className="flex flex-1 overflow-hidden">
-        <div className="flex flex-col flex-1 border-r border-white/5">
-          <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] uppercase bg-cyan-500/5 text-[#00ffff]">◈ YOUR SITE</div>
-          <ThoughtLog thoughts={rivaThoughts} label="Riva" color="#00ffff" />
-          <BrowserPanel label="RIVA" color="#00ffff" frameSrc={rivaFrame} active onCanvasClick={handleRivaClick} status={rivaStatus} />
-        </div>
-        <div className="flex flex-col flex-1">
-          <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] uppercase bg-red-500/5 text-[#ff3333]">◈ COMPETITOR</div>
-          <ThoughtLog thoughts={compThoughts} label="Competitor" color="#ff3333" />
-          <BrowserPanel label="COMP" color="#ff3333" frameSrc="" active={false} status="" />
-        </div>
+      <div 
+        className="relative flex-1 bg-black flex items-center justify-center overflow-hidden"
+        style={{ cursor: isPaused ? 'crosshair' : 'wait' }}
+        onMouseMove={e => handleMouse(e, 'mousemove')}
+        onClick={e => handleMouse(e, 'click')}
+        onWheel={handleWheel}
+      >
+        {frameSrc ? (
+          <img src={frameSrc} className="w-full h-full object-contain pointer-events-none select-none" alt="preview" />
+        ) : (
+          <div className="text-white/5 text-[10px] tracking-[4px] uppercase">{label} OFFLINE</div>
+        )}
+        
+        {isPaused && (
+          <div className="absolute inset-0 border-2 border-yellow-500/20 pointer-events-none shadow-[inset_0_0_80px_rgba(234,179,8,0.1)]" />
+        )}
       </div>
     </div>
   );
@@ -236,4 +121,93 @@ function DashboardContent() {
 
 export default function Dashboard() {
   return <Suspense fallback={<div>Loading...</div>}><DashboardContent /></Suspense>;
+}
+
+function DashboardContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const targetUrl = searchParams.get('url') || '';
+
+  const [rivaThoughts, setRivaThoughts] = useState<Thought[]>([]);
+  const [compThoughts, setCompThoughts] = useState<Thought[]>([]);
+  const [rivaFrame, setRivaFrame] = useState('');
+  const [rivaPaused, setRivaPaused] = useState(false);
+  const [compPaused, setCompPaused] = useState(false);
+  const [wsState, setWsState] = useState<'connecting' | 'open' | 'closed'>('connecting');
+  const wsRef = useRef<WebSocket | null>(null);
+
+  function now() { return new Date().toLocaleTimeString('en-US', { hour12: false, minute:'2-digit', second:'2-digit' }); }
+
+  useEffect(() => {
+    if (!targetUrl) return;
+    const ws = new WebSocket(`ws://localhost:8000/ws/browse`);
+    wsRef.current = ws;
+    ws.onopen = () => { setWsState('open'); ws.send(JSON.stringify({ url: targetUrl })); };
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'frame') setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
+      else if (msg.type === 'thought') setRivaThoughts(p => [...p, { ...msg, ts: now() }]);
+      else if (msg.type === 'auto_pause') setRivaPaused(true);
+    };
+    ws.onclose = () => setWsState('closed');
+    return () => ws.close();
+  }, [targetUrl]);
+
+  function handleInteraction(type: string, x: number, y: number, deltaY = 0) {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type, x, y, deltaY }));
+    }
+  }
+
+  function handleGoto(url: string) {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'goto', url }));
+    }
+  }
+
+  function togglePause(side: 'riva' | 'comp') {
+    const isP = side === 'riva' ? !rivaPaused : !compPaused;
+    if (side === 'riva') setRivaPaused(isP); else setCompPaused(isP);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: isP ? 'pause' : 'resume' }));
+    }
+  }
+
+  return (
+    <div className="h-screen flex flex-col bg-[#050a15] text-white overflow-hidden">
+      <header className="flex items-center justify-between px-6 py-3 border-b border-white/5 bg-[#030810]">
+        <button onClick={() => router.push('/')} className="flex items-center gap-3">
+          <Shield size={20} className="text-[#00ffff]" />
+          <span className="font-bold tracking-[8px] text-lg uppercase">RIVA</span>
+        </button>
+        <div className="text-[10px] font-mono text-[#00ffff]/60 bg-black/40 px-4 py-1.5 rounded-full border border-white/5">
+          TARGET: {targetUrl}
+        </div>
+        <div className="flex items-center gap-3 text-[10px] font-bold">
+           <div className={`w-2 h-2 rounded-full ${wsState === 'open' ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-red-500'}`} />
+           {wsState.toUpperCase()}
+        </div>
+      </header>
+
+      <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-col flex-1 border-r border-white/5">
+          <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] bg-cyan-500/5 text-[#00ffff] border-b border-white/5">◈ PRIMARY AGENT</div>
+          <ThoughtLog thoughts={rivaThoughts} label="RIVA" color="#00ffff" />
+          <BrowserPanel 
+            label="RIVA" color="#00ffff" frameSrc={rivaFrame} active status={targetUrl}
+            isPaused={rivaPaused} onTogglePause={() => togglePause('riva')}
+            onInteraction={handleInteraction} onGoto={handleGoto}
+          />
+        </div>
+        <div className="flex flex-col flex-1 bg-black/20">
+          <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] bg-red-500/5 text-[#ff3333] border-b border-white/5">◈ COMPETITOR INTEL</div>
+          <ThoughtLog thoughts={compThoughts} label="COMP" color="#ff3333" />
+          <BrowserPanel 
+            label="COMP" color="#ff3333" frameSrc="" active={false} status=""
+            isPaused={compPaused} onTogglePause={() => togglePause('comp')}
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
