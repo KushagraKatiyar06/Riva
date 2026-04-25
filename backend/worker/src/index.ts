@@ -28,18 +28,27 @@ export class SessionDO extends DurableObject<Env> {
 
   // ── WebSocket upgrade ───────────────────────────────────────────────────
   override async fetch(req: Request): Promise<Response> {
+    console.log('[DO] Fetch received in SessionDO');
     if (req.headers.get('Upgrade') !== 'websocket') {
+      console.warn('[DO] Rejecting request: Expected WebSocket upgrade');
       return new Response('Expected WebSocket upgrade', { status: 426 });
     }
 
-    const pair = new WebSocketPair();
-    const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
+    try {
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
 
-    // ctx.acceptWebSocket (not server.accept()) enables hibernation:
-    // the DO sleeps between messages, costing nothing while idle.
-    this.ctx.acceptWebSocket(server);
+      // ctx.acceptWebSocket (not server.accept()) enables hibernation:
+      // the DO sleeps between messages, costing nothing while idle.
+      console.log('[DO] Accepting WebSocket with hibernation...');
+      this.ctx.acceptWebSocket(server);
 
-    return new Response(null, { status: 101, webSocket: client });
+      console.log('[DO] Returning 101 Switching Protocols');
+      return new Response(null, { status: 101, webSocket: client });
+    } catch (e: any) {
+      console.error('[DO] Error in fetch:', e.message || e);
+      return new Response(`DO Internal Error: ${e.message || e}`, { status: 500 });
+    }
   }
 
   // ── Incoming messages from frontend ─────────────────────────────────────
@@ -195,13 +204,25 @@ export class SessionDO extends DurableObject<Env> {
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
+    console.log(`[Worker] Incoming request: ${req.method} ${url.pathname}`);
 
     if (req.headers.get('Upgrade') === 'websocket' && url.pathname === '/ws/browse') {
-      // Each session gets its own DO keyed by UUID — sessions never collide.
-      // Pass ?session=<id> to reconnect to an existing session later.
-      const sessionId = url.searchParams.get('session') ?? crypto.randomUUID();
-      const stub = env.SESSION.get(env.SESSION.idFromName(sessionId));
-      return stub.fetch(req);
+      console.log('[Worker] WebSocket upgrade detected, routing to Durable Object...');
+      try {
+        // Each session gets its own DO keyed by UUID — sessions never collide.
+        // Pass ?session=<id> to reconnect to an existing session later.
+        const sessionId = url.searchParams.get('session') ?? crypto.randomUUID();
+        console.log(`[Worker] Session ID: ${sessionId}`);
+        
+        const id = env.SESSION.idFromName(sessionId);
+        const stub = env.SESSION.get(id);
+        
+        console.log('[Worker] Forwarding fetch to Durable Object stub...');
+        return await stub.fetch(req);
+      } catch (e: any) {
+        console.error('[Worker] Durable Object routing failed:', e.message || e);
+        return new Response(`Durable Object Error: ${e.message || e}`, { status: 502 });
+      }
     }
 
     if (url.pathname === '/api/health') {

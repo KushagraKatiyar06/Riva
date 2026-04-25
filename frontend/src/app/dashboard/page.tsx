@@ -254,8 +254,18 @@ function DashboardContent() {
       }
     };
 
-    ws.onclose = () => setWsState('closed');
-    ws.onerror = () => addThought('WebSocket error — check backend.', 'error');
+    ws.onclose = (e) => {
+      setWsState('closed');
+      console.log(`[WebSocket] Closed: ${e.code} ${e.reason}`);
+    };
+    
+    ws.onerror = (e) => {
+      console.error('[WebSocket] Error observed:', e);
+      // Only report to the UI if we aren't already open
+      if (ws.readyState !== WebSocket.OPEN) {
+        addThought('Connection error — checking agent status...', 'error');
+      }
+    };
 
     return () => { ws.close(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
