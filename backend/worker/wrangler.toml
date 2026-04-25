@@ -3,16 +3,16 @@ main = "src/index.ts"
 compatibility_date = "2025-03-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Cloudflare-managed Chrome
 [browser]
 binding = "BROWSER"
 
-# Each browser session gets its own isolated Durable Object instance
 [[durable_objects.bindings]]
-name = "SESSION"
-class_name = "SessionDO"
+name = "RIVA_BRAIN"
+class_name = "RivaBrainDO"
 
-# Required: tells Cloudflare to create the DO class on first deploy
 [[migrations]]
-tag = "v1"
-new_classes = ["SessionDO"]
+tag = "v10"
+new_sqlite_classes = ["RivaBrainDO"]
+
+[vars]
+GEMINI_API_KEY = "REPLACE_ME"

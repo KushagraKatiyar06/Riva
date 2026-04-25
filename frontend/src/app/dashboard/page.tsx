@@ -107,7 +107,6 @@ function BrowserPanel({
       className="flex flex-col rounded-b-lg overflow-hidden flex-1"
       style={{ border: `1px solid ${color}22`, borderTop: 'none' }}
     >
-      {/* Chrome-style toolbar */}
       <div
         className="flex items-center gap-2 px-3 py-2 border-b"
         style={{ background: '#08111f', borderColor: `${color}22` }}
@@ -129,70 +128,17 @@ function BrowserPanel({
         >
           {label}
         </div>
-        <div
-          className="w-2 h-2 rounded-full"
-          style={{
-            background: active ? color : '#333',
-            boxShadow: active ? `0 0 6px ${color}` : 'none',
-            animation: active ? 'pulse 2s infinite' : 'none',
-          }}
-        />
       </div>
 
-      {/* Preview area */}
       <div
         className="relative flex-1 flex items-center justify-center"
-        style={{
-          background: '#020609',
-          cursor: active && frameSrc ? 'crosshair' : 'default',
-          minHeight: 0,
-        }}
+        style={{ background: '#020609', cursor: active && frameSrc ? 'crosshair' : 'default', minHeight: 0 }}
         onClick={handleClick}
       >
         {frameSrc ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={frameSrc}
-            alt="browser preview"
-            className="w-full h-full object-contain block"
-            draggable={false}
-          />
+          <img src={frameSrc} alt="preview" className="w-full h-full object-contain block" draggable={false} />
         ) : (
-          <div className="flex flex-col items-center gap-4 opacity-20">
-            {/* Idle eye */}
-            <svg viewBox="0 0 200 120" style={{ width: 120 }}>
-              <defs>
-                <clipPath id={`idle-clip-${label}`}>
-                  <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" />
-                </clipPath>
-              </defs>
-              <g clipPath={`url(#idle-clip-${label})`}>
-                <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" fill={active ? '#e0f7fa' : '#2a1a1a'} />
-                <circle cx="100" cy="60" r="28" fill={active ? '#002233' : '#1a0000'} />
-                <circle cx="100" cy="60" r="10" fill={color} style={{ filter: `drop-shadow(0 0 6px ${color})` }} />
-                <rect width="200" height="120" fill={active ? '#1a2a4a' : '#2a1a1a'} style={{ transform: 'translateY(-100%)' }} />
-              </g>
-              <path d="M10,60 Q100,-15 190,60" fill="none" stroke={color} strokeWidth="2" opacity="0.3" />
-            </svg>
-            <p className="text-xs tracking-widest uppercase" style={{ color }}>
-              {active ? 'Connecting...' : 'Pending'}
-            </p>
-          </div>
-        )}
-
-        {/* HITL hint overlay */}
-        {active && frameSrc && (
-          <div
-            className="absolute bottom-2 right-2 text-xs px-2 py-1 rounded"
-            style={{
-              background: 'rgba(0,0,0,0.7)',
-              color: 'rgba(255,255,255,0.4)',
-              fontFamily: 'monospace',
-              letterSpacing: 1,
-            }}
-          >
-            click to intervene
-          </div>
+          <p className="text-xs tracking-widest uppercase opacity-20" style={{ color }}>{label} OFFLINE</p>
         )}
       </div>
     </div>
@@ -206,9 +152,7 @@ function DashboardContent() {
   const targetUrl = searchParams.get('url') || '';
 
   const [rivaThoughts, setRivaThoughts] = useState<Thought[]>([]);
-  const [compThoughts] = useState<Thought[]>([
-    { text: 'Awaiting second URL input.', state: 'info', ts: now() },
-  ]);
+  const [compThoughts, setCompThoughts] = useState<Thought[]>([]);
 
   const [rivaFrame, setRivaFrame] = useState<string>('');
   const [rivaStatus, setRivaStatus] = useState<string>(targetUrl);
@@ -216,59 +160,40 @@ function DashboardContent() {
 
   const wsRef = useRef<WebSocket | null>(null);
 
-  function now() {
-    return new Date().toLocaleTimeString('en-US', { hour12: false });
-  }
+  function now() { return new Date().toLocaleTimeString('en-US', { hour12: false }); }
+
+  useEffect(() => {
+    setCompThoughts([{ text: 'Awaiting second URL input.', state: 'info', ts: now() }]);
+  }, []);
 
   function addThought(text: string, state: string) {
     setRivaThoughts(prev => [...prev, { text, state, ts: now() }]);
-    if (state === 'navigating' && text.startsWith('Landed')) {
-      setRivaStatus(text.replace('Landed on: ', ''));
-    }
   }
 
   useEffect(() => {
     if (!targetUrl) return;
-
-    // Dev: wrangler dev --remote runs on 8787
-    // Prod: set NEXT_PUBLIC_WORKER_URL=riva-worker.your-subdomain.workers.dev
-    const workerHost = process.env.NEXT_PUBLIC_WORKER_URL ?? 'localhost:8787';
-    const wsProtocol = workerHost.startsWith('localhost') ? 'ws' : 'wss';
-    const ws = new WebSocket(`${wsProtocol}://${workerHost}/ws/browse`);
+    const ws = new WebSocket(`ws://localhost:8000/ws/browse`);
     wsRef.current = ws;
+    let hasConnected = false;
+
     ws.onopen = () => {
+      hasConnected = true;
       setWsState('open');
       ws.send(JSON.stringify({ url: targetUrl }));
     };
 
     ws.onmessage = (e) => {
       try {
-        const msg = JSON.parse(e.data as string);
-        if (msg.type === 'frame') {
-          setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
-        } else if (msg.type === 'thought') {
-          addThought(msg.text, msg.state);
-        }
-      } catch {
-        /* ignore malformed */
-      }
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'frame') setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
+        else if (msg.type === 'thought') addThought(msg.text, msg.state);
+      } catch {}
     };
 
-    ws.onclose = (e) => {
-      setWsState('closed');
-      console.log(`[WebSocket] Closed: ${e.code} ${e.reason}`);
-    };
-    
-    ws.onerror = (e) => {
-      console.error('[WebSocket] Error observed:', e);
-      // Only report to the UI if we aren't already open
-      if (ws.readyState !== WebSocket.OPEN) {
-        addThought('Connection error — checking agent status...', 'error');
-      }
-    };
+    ws.onclose = () => setWsState('closed');
+    ws.onerror = () => { if (!hasConnected) addThought('Connecting to agent...', 'info'); };
 
-    return () => { ws.close(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => ws.close();
   }, [targetUrl]);
 
   function handleRivaClick(x: number, y: number) {
@@ -277,128 +202,38 @@ function DashboardContent() {
     }
   }
 
-  const wsIndicatorColor =
-    wsState === 'open' ? '#00ff88' :
-    wsState === 'connecting' ? '#ffcc00' : '#ff3333';
-
   return (
-    <div
-      className="h-screen flex flex-col overflow-hidden"
-      style={{ background: '#050a15', fontFamily: "'Inter', -apple-system, sans-serif" }}
-    >
-      {/* ── Top Bar ─────────────────────────────────────────── */}
-      <header
-        className="flex items-center justify-between px-6 py-3 border-b shrink-0"
-        style={{ borderColor: 'rgba(0,255,255,0.1)', background: '#030810' }}
-      >
-        <button
-          onClick={() => router.push('/')}
-          className="flex items-center gap-2"
-        >
-          <div
-            className="w-7 h-7 rounded-full flex items-center justify-center"
-            style={{ background: '#00ffff', boxShadow: '0 0 12px rgba(0,255,255,0.4)' }}
-          >
-            <Shield size={14} color="black" />
-          </div>
-          <span className="text-lg font-bold tracking-[6px] uppercase">RIVA</span>
+    <div className="h-screen flex flex-col bg-[#050a15] text-white overflow-hidden">
+      <header className="flex items-center justify-between px-6 py-3 border-b border-white/5 bg-[#030810]">
+        <button onClick={() => router.push('/')} className="flex items-center gap-2">
+          <Shield size={18} color="#00ffff" />
+          <span className="font-bold tracking-[8px] uppercase">RIVA</span>
         </button>
-
-        <div className="flex items-center gap-4 text-xs" style={{ fontFamily: 'monospace' }}>
-          <div className="flex items-center gap-2">
-            <div
-              className="w-2 h-2 rounded-full"
-              style={{
-                background: wsIndicatorColor,
-                boxShadow: `0 0 6px ${wsIndicatorColor}`,
-                animation: wsState === 'open' ? 'pulse 2s infinite' : 'none',
-              }}
-            />
-            <span style={{ color: 'rgba(255,255,255,0.4)' }}>Agent WS:</span>
-            <span style={{ color: wsIndicatorColor, textTransform: 'uppercase' }}>{wsState}</span>
-          </div>
-          <div style={{ color: 'rgba(255,255,255,0.2)' }}>|</div>
-          <div style={{ color: 'rgba(255,255,255,0.4)' }}>
-            <span style={{ color: 'rgba(255,255,255,0.2)' }}>target: </span>
-            <span style={{ color: '#00ffff' }}>{targetUrl.slice(0, 40)}{targetUrl.length > 40 ? '…' : ''}</span>
-          </div>
+        <div className="text-[10px] font-mono text-[#00ffff] opacity-50 truncate max-w-[40%]">
+          TARGET: {targetUrl}
+        </div>
+        <div className="flex items-center gap-2 text-xs font-bold uppercase opacity-40">
+           <div className={`w-2 h-2 rounded-full ${wsState === 'open' ? 'bg-green-500' : 'bg-red-500'}`} />
+           {wsState}
         </div>
       </header>
 
-      {/* ── Two-Panel Layout ─────────────────────────────────── */}
-      <div className="flex flex-1 gap-0 overflow-hidden">
-
-        {/* ── LEFT: Riva / Your Site ──────────────────────────── */}
-        <div
-          className="flex flex-col flex-1 overflow-hidden border-r"
-          style={{ borderColor: 'rgba(0,255,255,0.12)' }}
-        >
-          <div
-            className="px-4 py-2 text-xs font-bold tracking-[4px] uppercase border-b shrink-0"
-            style={{
-              color: '#00ffff',
-              borderColor: 'rgba(0,255,255,0.12)',
-              background: 'rgba(0,255,255,0.03)',
-            }}
-          >
-            ◈ YOUR SITE — AGENT ACTIVE
-          </div>
-
+      <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-col flex-1 border-r border-white/5">
+          <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] uppercase bg-cyan-500/5 text-[#00ffff]">◈ YOUR SITE</div>
           <ThoughtLog thoughts={rivaThoughts} label="Riva" color="#00ffff" />
-
-          <BrowserPanel
-            label="RIVA"
-            color="#00ffff"
-            frameSrc={rivaFrame}
-            active
-            onCanvasClick={handleRivaClick}
-            status={rivaStatus}
-          />
+          <BrowserPanel label="RIVA" color="#00ffff" frameSrc={rivaFrame} active onCanvasClick={handleRivaClick} status={rivaStatus} />
         </div>
-
-        {/* ── RIGHT: Competitor (placeholder) ─────────────────── */}
-        <div className="flex flex-col flex-1 overflow-hidden">
-          <div
-            className="px-4 py-2 text-xs font-bold tracking-[4px] uppercase border-b shrink-0"
-            style={{
-              color: '#ff3333',
-              borderColor: 'rgba(255,51,51,0.12)',
-              background: 'rgba(255,51,51,0.03)',
-            }}
-          >
-            ◈ COMPETITOR — PENDING
-          </div>
-
+        <div className="flex flex-col flex-1">
+          <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] uppercase bg-red-500/5 text-[#ff3333]">◈ COMPETITOR</div>
           <ThoughtLog thoughts={compThoughts} label="Competitor" color="#ff3333" />
-
-          <BrowserPanel
-            label="COMP"
-            color="#ff3333"
-            frameSrc=""
-            active={false}
-            status=""
-          />
+          <BrowserPanel label="COMP" color="#ff3333" frameSrc="" active={false} status="" />
         </div>
       </div>
     </div>
   );
 }
 
-// ── Page ─────────────────────────────────────────────────────
 export default function Dashboard() {
-  return (
-    <Suspense
-      fallback={
-        <div className="h-screen flex items-center justify-center bg-[#050a15] text-white tracking-widest">
-          INITIALIZING...
-        </div>
-      }
-    >
-      <DashboardContent />
-    </Suspense>
-  );
-}
-
-function now() {
-  return new Date().toLocaleTimeString('en-US', { hour12: false });
+  return <Suspense fallback={<div>Loading...</div>}><DashboardContent /></Suspense>;
 }
