@@ -1,0 +1,501 @@
+================================================================================
+RIVA — TECHNICAL EXPLANATION
+Autonomous Competitive Intelligence at the Edge
+================================================================================
+
+This document explains what Riva is, how it works technically, the thought
+process behind every architectural decision, and where it is going. Written
+so you can explain it to anyone — technical or not — and pick up exactly
+where you left off in any future session.
+
+
+────────────────────────────────────────────────────────────────────────────────
+1. WHAT IS RIVA
+────────────────────────────────────────────────────────────────────────────────
+
+Riva is an autonomous competitive intelligence platform. The core idea:
+instead of a GTM (go-to-market) person manually visiting competitor websites,
+reading pricing pages, and building comparison documents by hand, Riva sends
+an AI agent to do it — in real time, with a live video feed of what the agent
+is doing, and a stream of its reasoning shown to the user.
+
+The end output is a battlecard: a structured document comparing your product
+against a competitor across pricing, features, integrations, positioning, etc.
+Eventually this becomes a PowerPoint slide deck the agent generates itself.
+
+The key UX insight: the user should feel like they are watching an intelligent
+assistant do the research for them. That's why there's a live browser preview
+(so they can see exactly what the agent sees), a thought stream (so they can
+see why it's doing what it's doing), and a HITL (Human-In-The-Loop) system
+where the user can click into the live browser to help the agent past a CAPTCHA
+or a login wall.
+
+
+────────────────────────────────────────────────────────────────────────────────
+2. WHERE WE STARTED — THE PYTHON MVP
+────────────────────────────────────────────────────────────────────────────────
+
+The original MVP was built entirely in Python using FastAPI and Playwright.
+
+  backend/main.py  —  A FastAPI WebSocket server.
+
+When a user entered a URL on the dashboard and hit enter, the frontend opened
+a WebSocket connection to this Python server. The server then:
+
+  1. Launched a headless Chrome browser locally using Playwright.
+  2. Opened a CDP (Chrome DevTools Protocol) session on that browser.
+  3. Started a "screencast" — Chrome natively supports streaming JPEG frames
+     of the current page via CDP. This is the same protocol browser devtools
+     use internally.
+  4. Forwarded those JPEG frames over the WebSocket to the Next.js frontend,
+     which rendered them as <img> tags — creating a live video feed.
+  5. Ran an agent loop: navigate to the URL, scan for a "Pricing" or "Plans"
+     link, highlight it in cyan, hover, click, scroll, etc.
+  6. Listened for incoming click events from the frontend (HITL) and forwarded
+     them as mouse clicks into the browser.
+
+This worked. The thought stream, the live preview, the HITL canvas clicks —
+all functional.
+
+The problem: it ran on your local machine. Your laptop was the browser.
+That means:
+  - Only one user (you) can use it at a time.
+  - It dies if your machine sleeps or loses connection.
+  - You can't give it to anyone else.
+  - It eats your RAM and CPU.
+
+This is fine for a proof of concept but cannot scale.
+
+
+────────────────────────────────────────────────────────────────────────────────
+3. THE CLOUDFLARE MIGRATION — WHY CLOUDFLARE
+────────────────────────────────────────────────────────────────────────────────
+
+The target stack is Cloudflare's edge platform. The specific products:
+
+  CLOUDFLARE WORKERS
+  Serverless TypeScript functions that run globally. They replace FastAPI.
+  No servers to manage, no Docker, no ports. You deploy code and it runs
+  at the edge closest to the user.
+
+  CLOUDFLARE BROWSER RENDERING
+  Cloudflare runs a real managed Chrome instance on their infrastructure.
+  You connect to it via the same CDP protocol. This replaces "local Playwright".
+  The browser runs on Cloudflare's servers, not yours.
+
+  DURABLE OBJECTS
+  The key piece that makes long-running stateful sessions possible.
+  Each Durable Object is a unique, isolated JavaScript class instance that
+  lives in Cloudflare's infrastructure. It has its own in-memory state and
+  its own SQLite database (up to 10GB). It can hold a WebSocket connection
+  open indefinitely. This is what makes the browser session "durable" — it
+  doesn't die when a Worker times out.
+
+  VECTORIZE + WORKERS AI
+  Cloudflare's vector database and embedding model service. Used for RAG
+  (Retrieval-Augmented Generation) — storing scraped content as vectors so
+  the agent can semantically search across everything it has learned.
+
+Why Cloudflare specifically over AWS/GCP/Azure:
+  - Browser Rendering is a native Cloudflare product — no third-party scraping
+    service needed, no Browserbase, no ScrapingBee.
+  - Durable Objects are the only product in the market that natively combines
+    WebSocket hibernation + per-session SQLite + Cloudflare edge location.
+  - Workers AI means embeddings happen on Cloudflare's hardware, not an
+    external API. No OpenAI billing for embeddings.
+  - The entire stack is one platform, one billing account, one deployment
+    command. No glue code between services.
+
+
+────────────────────────────────────────────────────────────────────────────────
+4. THE FIRST ATTEMPT — WHY IT FAILED
+────────────────────────────────────────────────────────────────────────────────
+
+The first migration attempt put all the browser logic directly inside a
+Cloudflare Worker (in backend/worker/src/index.ts, first version).
+
+The approach was:
+  - Accept the WebSocket upgrade in the Worker.
+  - Call ctx.waitUntil(handleBrowseSession(...)) to run the browser in the
+    background after returning the 101 response.
+  - The session function would launch Chrome, start the screencast, run the
+    agent, and then wait forever for the client to disconnect.
+
+This produced the error:
+  "The Workers runtime canceled this request because it detected that your
+   Worker's code had hung and would never generate a response."
+
+Why: Cloudflare Workers have a fundamentally different execution model from a
+server. A Worker is meant to receive a request, do some work, and return a
+response. It has CPU time limits (30 seconds on paid plans). The runtime
+watches for promises that never resolve — which is exactly what "wait for the
+WebSocket to close" looks like to it.
+
+ctx.waitUntil is designed to extend a Worker's life for things like cache
+writes or analytics pings after the response is sent — not for holding a
+10-minute browser session open.
+
+The Worker model is the wrong tool for long-lived stateful connections.
+That's not a bug or a limitation — it's by design. Workers are stateless and
+short-lived. The tool designed for the opposite is Durable Objects.
+
+
+────────────────────────────────────────────────────────────────────────────────
+5. THE CORRECT ARCHITECTURE — DURABLE OBJECTS
+────────────────────────────────────────────────────────────────────────────────
+
+Current implementation lives in:
+  backend/worker/src/index.ts
+  backend/worker/wrangler.toml
+
+The architecture is now split into two distinct layers:
+
+  LAYER 1: THE WORKER (Router)
+  ─────────────────────────────
+  The Worker's only job is to look at incoming requests and route them.
+  When it sees a WebSocket upgrade to /ws/browse, it creates or retrieves a
+  Durable Object instance and forwards the request to it. That's it. The
+  Worker itself does no browser work and holds no state.
+
+    Worker receives WS upgrade
+      → creates a SessionDO with a unique UUID as the key
+      → forwards the request to that DO
+      → returns the 101 Switching Protocols response
+      → Worker is done. Its job is over.
+
+  LAYER 2: THE SESSION DURABLE OBJECT (The Agent)
+  ──────────────────────────────────────────────────
+  The SessionDO class is where everything actually happens. Each instance
+  is a completely isolated JavaScript object that lives for the duration of
+  one browser session.
+
+  Key difference from the Worker approach:
+  The DO uses this.ctx.acceptWebSocket(server) instead of server.accept().
+  This is called "WebSocket Hibernation". It means:
+    - The DO can go to sleep between messages with zero CPU cost.
+    - When a message arrives (a HITL click, for example), the DO wakes up,
+      processes it, and goes back to sleep.
+    - The runtime NEVER kills a DO for being "hung". This is their purpose.
+
+  Message flow inside the DO:
+    1. Client connects → DO's fetch() method runs → 101 returned.
+    2. Client sends { url: "https://stripe.com" } → webSocketMessage() fires.
+    3. DO sees it's a URL, not a click → calls startBrowserSession(url).
+    4. Browser is launched. Screencast starts. Agent navigates.
+    5. CDP pushes screencastFrame events → DO sends frames to client via ws.send().
+    6. Client sends { type: "click", x: 0.4, y: 0.6 } → webSocketMessage() fires.
+    7. DO translates normalized coords to pixels → page.mouse.click(x, y).
+    8. Client closes tab → webSocketClose() fires → browser.close() called.
+
+  The DO holds three pieces of state across the session:
+    this.browser   — the Puppeteer Browser instance
+    this.page      — the active Page
+    this.cdp       — the CDP session for screencast control
+
+  These persist in memory for the DO's lifetime. Nothing is shared between
+  different users' sessions because each user gets their own DO instance
+  (keyed by a unique UUID).
+
+
+────────────────────────────────────────────────────────────────────────────────
+6. HOW CDP SCREENCAST WORKS
+────────────────────────────────────────────────────────────────────────────────
+
+CDP = Chrome DevTools Protocol. It's the protocol Chrome uses internally to
+communicate with browser devtools. It's also what Puppeteer and Playwright
+use under the hood to control the browser.
+
+We use it directly for the screencast because it's the most efficient path:
+no screenshot polling, no video encoding overhead, just a stream of JPEG
+frames that Chrome produces natively.
+
+The flow:
+
+  await cdp.send("Page.startScreencast", {
+    format: "jpeg",
+    quality: 70,
+    maxWidth: 1280,
+    maxHeight: 720,
+    everyNthFrame: 2,  // skip every other frame for bandwidth
+  })
+
+After this call, Chrome starts emitting "Page.screencastFrame" events.
+Each event contains:
+  - params.data: a base64-encoded JPEG of the current viewport
+  - params.sessionId: an ID we must acknowledge to keep the stream flowing
+
+We acknowledge each frame with:
+  await cdp.send("Page.screencastFrameAck", { sessionId: params.sessionId })
+
+And we forward the base64 JPEG to the frontend:
+  ws.send(JSON.stringify({ type: "frame", data: params.data }))
+
+The frontend receives this and sets it as the src of an <img> tag:
+  setRivaFrame(`data:image/jpeg;base64,${msg.data}`)
+
+This creates the live video effect. It's not a video stream — it's a rapid
+sequence of JPEG images, typically 10-30 per second depending on page activity.
+
+The "everyNthFrame: 2" setting means Chrome sends every other frame, halving
+the bandwidth without a noticeable quality drop for this use case.
+
+
+────────────────────────────────────────────────────────────────────────────────
+7. HOW THE AGENT NAVIGATION WORKS (CURRENT STATE)
+────────────────────────────────────────────────────────────────────────────────
+
+The current agent is simple — it demonstrates the concept but is not yet
+the full autonomous loop described in AGENT.md.
+
+Navigation logic in startBrowserSession():
+
+  1. page.goto(url) — navigate to the target site.
+  2. findPricingTarget() — runs document.querySelectorAll inside the browser
+     to find any <a> or <button> whose text matches "pricing" or "plans".
+     Returns the element's centre coordinates {x, y} and its label text.
+  3. page.evaluate() — injects CSS to highlight the found element in cyan.
+  4. page.mouse.move() + page.mouse.click() — simulates a real user hovering
+     and clicking the element.
+  5. Scroll the page to survey content below the fold.
+  6. Emit "complete" — hand off to HITL mode.
+
+The thought stream runs in parallel. Every significant action emits a
+{ type: "thought", text: "...", state: "navigating" | "found" | "clicking" | ... }
+message over the WebSocket. The frontend renders these in the terminal-style
+thought log panel with color-coded state indicators.
+
+The agent future vision (from AGENT.md, not yet built):
+  - Compare coverage between two sites: if site A has pricing, features,
+    integrations, and case studies but site B only has pricing and features,
+    the agent autonomously goes back to site B and searches for the missing
+    information.
+  - This "gap detection and re-navigation loop" requires Vectorize (to store
+    what was found) and the DO's SQLite (to remember the session state between
+    navigation steps). That's Phase 3.
+
+
+────────────────────────────────────────────────────────────────────────────────
+8. THE FRONTEND — HOW IT CONNECTS
+────────────────────────────────────────────────────────────────────────────────
+
+The frontend is Next.js (React 19, Tailwind CSS 4, TypeScript).
+Lives in: frontend/src/app/
+
+  page.tsx       — Landing page. Animated "eyes" (cyan = your site, red = competitor).
+                   User enters a URL and hits enter. Navigates to /dashboard?url=...
+
+  dashboard/page.tsx — The main agent UI.
+    - Split screen: left panel (your site, agent active), right panel (competitor, pending).
+    - Each panel has a ThoughtLog (terminal-style scrolling log) and a BrowserPanel
+      (the live JPEG stream rendered as an <img>).
+    - On mount, opens a WebSocket to the Worker.
+    - First message sent: { url: targetUrl }
+    - Incoming "frame" messages → update the <img> src.
+    - Incoming "thought" messages → append to the thought log array.
+    - Canvas clicks → send { type: "click", x: normalizedX, y: normalizedY }.
+
+WebSocket URL logic (dashboard/page.tsx):
+  const workerHost = process.env.NEXT_PUBLIC_WORKER_URL ?? 'localhost:8787';
+  const wsProtocol = workerHost.startsWith('localhost') ? 'ws' : 'wss';
+  const ws = new WebSocket(`${wsProtocol}://${workerHost}/ws/browse`);
+
+  - Local dev: connects to ws://localhost:8787/ws/browse (wrangler dev --remote)
+  - Production: set NEXT_PUBLIC_WORKER_URL to your Workers subdomain,
+    connects over wss:// (encrypted WebSocket)
+
+HITL canvas click normalization:
+  function handleClick(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;   // 0.0 to 1.0
+    const y = (e.clientY - rect.top) / rect.height;   // 0.0 to 1.0
+    ws.send(JSON.stringify({ type: "click", x, y }));
+  }
+
+  The DO receives normalized coordinates and scales them to the browser's
+  actual 1280x720 viewport: x * 1280, y * 720. This handles any size
+  mismatch between the rendered preview and the real browser.
+
+
+────────────────────────────────────────────────────────────────────────────────
+9. FILE STRUCTURE — WHERE EVERYTHING IS
+────────────────────────────────────────────────────────────────────────────────
+
+Riva/
+├── frontend/                       Next.js application
+│   └── src/app/
+│       ├── page.tsx                Landing page (animated eyes, URL input)
+│       ├── layout.tsx              Root layout
+│       ├── globals.css             Tailwind CSS 4 global styles
+│       └── dashboard/
+│           └── page.tsx            Agent dashboard (live preview + thought log)
+│
+├── backend/
+│   ├── main.py                     Original Python FastAPI backend (now retired)
+│   └── worker/                     Cloudflare Worker — the new backend
+│       ├── wrangler.toml           Cloudflare config (bindings: BROWSER, SESSION DO)
+│       ├── package.json            Dependencies: @cloudflare/puppeteer, wrangler
+│       ├── tsconfig.json           TypeScript config for Workers runtime
+│       └── src/
+│           └── index.ts            The Worker + SessionDO implementation
+│
+├── testing/                        Experimental scripts (not production)
+│   ├── agent_playwright.py         Early Playwright + Gemini test
+│   └── gtm_scraper.py              Firecrawl + Gemini scraper prototype
+│
+├── AGENT.md                        Product vision and technical blueprint
+├── explanation.txt                 This document
+├── requirements.txt                Python dependencies (for backend/main.py)
+└── .env                            API keys (Firecrawl, Gemini) — not committed
+
+
+────────────────────────────────────────────────────────────────────────────────
+10. HOW TO RUN IT
+────────────────────────────────────────────────────────────────────────────────
+
+WORKER (Cloudflare backend):
+  cd backend/worker
+  npx wrangler login         # one time — authenticates with your CF account
+  npm install
+  npm run dev                # runs: wrangler dev --remote
+
+  IMPORTANT: --remote is required. The BROWSER binding (Cloudflare's managed
+  Chrome) only exists in Cloudflare's actual infrastructure. It cannot be
+  emulated locally. wrangler dev --remote runs your Worker code on CF's edge
+  but proxies it through localhost:8787 for development convenience.
+
+FRONTEND:
+  cd frontend
+  npm install
+  npm run dev                # runs on localhost:3000
+
+  Visit http://localhost:3000, enter any URL, watch the agent work.
+
+DEPLOYING TO PRODUCTION:
+  cd backend/worker
+  npm run deploy             # runs: wrangler deploy
+
+  Then set NEXT_PUBLIC_WORKER_URL=riva-worker.<your-subdomain>.workers.dev
+  in your frontend hosting environment (Cloudflare Pages, Vercel, etc.)
+
+
+────────────────────────────────────────────────────────────────────────────────
+11. WHAT COMES NEXT — THE ROADMAP
+────────────────────────────────────────────────────────────────────────────────
+
+PHASE 3 — PERSISTENT MEMORY (SQLite in Durable Objects)
+  The DO already has this.ctx.storage.sql available — it's a full SQLite
+  database scoped to that DO instance. The next step is writing to it:
+
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS thoughts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text TEXT,
+        state TEXT,
+        ts INTEGER
+      )
+    `);
+
+  This means thought logs, navigation history, and scraped page content
+  survive across reconnects. If a user refreshes the dashboard, they can
+  reconnect to the same session ID and get the full history back.
+
+  Session reconnect is already scaffolded: passing ?session=<uuid> to the
+  WebSocket URL routes to the same DO instance instead of creating a new one.
+
+PHASE 4 — RAG WITH VECTORIZE
+  Scraped text → Cloudflare Workers AI (embedding model) → Vectorize index.
+  Each vector is tagged with the session ID so queries are scoped per session.
+
+  At query time:
+    - Embed the question.
+    - Query Vectorize for the top-k most relevant chunks.
+    - Also run BM25 keyword search in SQLite (for exact pricing terms like
+      "egress" or "per seat" that vectors might miss).
+    - Merge results → pass to Claude/Gemini as context → generate battlecard.
+
+  This is the "Brain" layer from AGENT.md.
+
+PHASE 5 — DUAL AGENT + GAP DETECTION
+  Run two SessionDO instances in parallel: one for your product, one for the
+  competitor. After both complete their initial crawl, a comparison agent
+  looks at what each found (stored in their respective SQLite DBs + Vectorize).
+  If coverage is unequal, it sends the browser agent back to the weaker site
+  with specific instructions: "find the integrations page", "look for case
+  studies", etc. This loop continues until coverage is balanced.
+
+  This is the autonomous re-navigation feature discussed in the session.
+
+PHASE 6 — OUTPUT GENERATION
+  Once research is complete, a generation agent synthesizes the collected
+  data into:
+    - A structured JSON battlecard (validated with Pydantic schemas to prevent
+      hallucinations — if the LLM tries to make up a price, the schema rejects
+      it and the agent goes back to find the real one).
+    - A PowerPoint slide deck generated programmatically from the battlecard.
+    - A side-by-side comparison table in the dashboard UI.
+
+PHASE 7 — PDF / DOCUMENT UPLOAD
+  Users can upload PDFs of product documentation directly, bypassing the
+  browser agent loop entirely. The DO ingests the PDF, chunks it, embeds it
+  into Vectorize, and runs the comparison from the stored vectors. This is
+  the "upload pdfs of documentation" feature from AGENT.md.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12. KEY CONCEPTS GLOSSARY
+────────────────────────────────────────────────────────────────────────────────
+
+CDP (Chrome DevTools Protocol)
+  The protocol Chrome uses for its own devtools. We use it to control the
+  browser and receive screencast frames. It's a WebSocket protocol running
+  inside the Cloudflare Browser connection.
+
+Durable Object (DO)
+  A Cloudflare primitive. A JavaScript class instance that lives persistently
+  on Cloudflare's edge. It has its own memory, SQLite, and can hold WebSocket
+  connections open indefinitely. One DO instance = one user's session.
+
+WebSocket Hibernation
+  A DO feature. Instead of server.accept(), you call this.ctx.acceptWebSocket().
+  This lets the DO sleep between messages at zero CPU cost. The runtime wakes
+  it up when a new message arrives. Critical for sessions that might be idle
+  for minutes while the user watches the stream.
+
+RAG (Retrieval-Augmented Generation)
+  Instead of asking an LLM to answer from memory (which leads to hallucinations),
+  you first retrieve relevant text chunks from a database and include them in
+  the prompt. The LLM answers from the retrieved context, not from training data.
+
+BM25
+  A classical information retrieval algorithm (used by Elasticsearch, Solr, etc.).
+  Keyword-based, not semantic. Critical for exact-match terms like pricing
+  numbers, product names, and technical specifications that vector search
+  might paraphrase or miss.
+
+HITL (Human-In-The-Loop)
+  A mode where the autonomous agent pauses and lets the human take over.
+  In Riva, this means the user can click on the live browser preview and
+  the click is forwarded as a real mouse event into Cloudflare's Chrome.
+  Used for CAPTCHAs, login walls, or just manual guidance.
+
+Thought Stream
+  A real-time log of the agent's reasoning, sent as WebSocket messages with
+  a "state" field (navigating, scanning, found, clicking, hitl, complete, error).
+  The frontend renders these in a terminal-style panel with color-coded state
+  indicators. The intent is to make the agent's decision process transparent
+  to the user.
+
+Screencast
+  Chrome's built-in ability to stream JPEG frames of the current page via CDP.
+  Not a video codec — just a stream of individual images. Fast enough to feel
+  like a live video feed at the quality settings we use (70% JPEG, every 2nd
+  frame, 1280x720).
+
+wrangler
+  Cloudflare's CLI tool for developing and deploying Workers. "wrangler dev --remote"
+  runs your code on Cloudflare's actual edge infrastructure but proxies it
+  locally so you can develop against it without deploying.
+
+================================================================================
+END OF DOCUMENT
+================================================================================
