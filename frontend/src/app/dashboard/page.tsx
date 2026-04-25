@@ -41,7 +41,7 @@ function ThoughtLog({ thoughts, label, color }: { thoughts: Thought[]; label: st
   );
 }
 
-function BrowserPanel({ label, color, frameSrc, active, status, isPaused, onTogglePause, onInteraction, onGoto }: any) {
+function BrowserPanel({ label, color, frameSrc, active, isPaused, onTogglePause, onInteraction, onGoto }: any) {
   const [manualUrl, setManualUrl] = useState('');
 
   function handleClick(e: any) {
@@ -117,50 +117,69 @@ export default function Dashboard() {
 function DashboardContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const targetUrl = searchParams.get('url') || '';
+  const rivaUrl = searchParams.get('riva') || '';
+  const compUrl = searchParams.get('comp') || '';
 
   const [rivaThoughts, setRivaThoughts] = useState<Thought[]>([]);
   const [compThoughts, setCompThoughts] = useState<Thought[]>([]);
-  const [rivaFrame, setRivaFrame] = useState('');
-  const [rivaPaused, setRivaPaused] = useState(false);
-  const [compPaused, setCompPaused] = useState(false);
-  const [wsState, setWsState] = useState<'connecting' | 'open' | 'closed'>('connecting');
-  const wsRef = useRef<WebSocket | null>(null);
+  const [rivaFrame,    setRivaFrame]    = useState('');
+  const [compFrame,    setCompFrame]    = useState('');
+  const [rivaPaused,   setRivaPaused]   = useState(false);
+  const [compPaused,   setCompPaused]   = useState(false);
+  const [rivaWsState,  setRivaWsState]  = useState<'connecting' | 'open' | 'closed'>('connecting');
+  const [compWsState,  setCompWsState]  = useState<'connecting' | 'open' | 'closed'>('connecting');
+  const rivaWsRef = useRef<WebSocket | null>(null);
+  const compWsRef = useRef<WebSocket | null>(null);
 
-  function now() { return new Date().toLocaleTimeString('en-US', { hour12: false, minute:'2-digit', second:'2-digit' }); }
+  function now() { return new Date().toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', second: '2-digit' }); }
 
+  // Riva WS
   useEffect(() => {
-    if (!targetUrl) return;
-    const ws = new WebSocket(`ws://localhost:8000/ws/browse`);
-    wsRef.current = ws;
-    ws.onopen = () => { setWsState('open'); ws.send(JSON.stringify({ url: targetUrl })); };
+    if (!rivaUrl) return;
+    const ws = new WebSocket('ws://localhost:8000/ws/browse');
+    rivaWsRef.current = ws;
+    ws.onopen  = () => { setRivaWsState('open'); ws.send(JSON.stringify({ url: rivaUrl })); };
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'frame') setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
+      if (msg.type === 'frame')      setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
       else if (msg.type === 'thought') setRivaThoughts(p => [...p, { ...msg, ts: now() }]);
       else if (msg.type === 'auto_pause') setRivaPaused(true);
     };
-    ws.onclose = () => setWsState('closed');
+    ws.onclose = () => setRivaWsState('closed');
     return () => ws.close();
-  }, [targetUrl]);
+  }, [rivaUrl]);
 
-  function handleInteraction(type: string, x: number, y: number) {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type, x, y }));
-    }
-  }
+  // Competitor WS
+  useEffect(() => {
+    if (!compUrl) return;
+    const ws = new WebSocket('ws://localhost:8000/ws/browse');
+    compWsRef.current = ws;
+    ws.onopen  = () => { setCompWsState('open'); ws.send(JSON.stringify({ url: compUrl })); };
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'frame')      setCompFrame(`data:image/jpeg;base64,${msg.data}`);
+      else if (msg.type === 'thought') setCompThoughts(p => [...p, { ...msg, ts: now() }]);
+      else if (msg.type === 'auto_pause') setCompPaused(true);
+    };
+    ws.onclose = () => setCompWsState('closed');
+    return () => ws.close();
+  }, [compUrl]);
 
-  function handleGoto(url: string) {
+  function sendToWs(wsRef: React.RefObject<WebSocket | null>, msg: object) {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'goto', url }));
+      wsRef.current.send(JSON.stringify(msg));
     }
   }
 
   function togglePause(side: 'riva' | 'comp') {
-    const isP = side === 'riva' ? !rivaPaused : !compPaused;
-    if (side === 'riva') setRivaPaused(isP); else setCompPaused(isP);
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: isP ? 'pause' : 'resume' }));
+    if (side === 'riva') {
+      const next = !rivaPaused;
+      setRivaPaused(next);
+      sendToWs(rivaWsRef, { type: next ? 'pause' : 'resume' });
+    } else {
+      const next = !compPaused;
+      setCompPaused(next);
+      sendToWs(compWsRef, { type: next ? 'pause' : 'resume' });
     }
   }
 
@@ -171,31 +190,42 @@ function DashboardContent() {
           <Shield size={20} className="text-[#00ffff]" />
           <span className="font-bold tracking-[8px] text-lg uppercase">RIVA</span>
         </button>
-        <div className="text-[10px] font-mono text-[#00ffff]/60 bg-black/40 px-4 py-1.5 rounded-full border border-white/5">
-          TARGET: {targetUrl}
+        <div className="flex items-center gap-4 text-[10px] font-mono">
+          <span className="text-[#00ffff]/40 truncate max-w-[200px]">{rivaUrl}</span>
+          <span className="text-white/20">vs</span>
+          <span className="text-[#ff3333]/40 truncate max-w-[200px]">{compUrl}</span>
         </div>
-        <div className="flex items-center gap-3 text-[10px] font-bold">
-           <div className={`w-2 h-2 rounded-full ${wsState === 'open' ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-red-500'}`} />
-           {wsState.toUpperCase()}
+        <div className="flex items-center gap-4 text-[10px] font-bold">
+          <div className="flex items-center gap-1.5">
+            <div className={`w-2 h-2 rounded-full ${rivaWsState === 'open' ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'}`} />
+            <span className="text-white/30">RIVA</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className={`w-2 h-2 rounded-full ${compWsState === 'open' ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'}`} />
+            <span className="text-white/30">COMP</span>
+          </div>
         </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
         <div className="flex flex-col flex-1 border-r border-white/5">
-          <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] bg-cyan-500/5 text-[#00ffff] border-b border-white/5">◈ PRIMARY AGENT</div>
+          <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] bg-cyan-500/5 text-[#00ffff] border-b border-white/5">◈ YOUR SITE</div>
           <ThoughtLog thoughts={rivaThoughts} label="RIVA" color="#00ffff" />
-          <BrowserPanel 
-            label="RIVA" color="#00ffff" frameSrc={rivaFrame} active status={targetUrl}
+          <BrowserPanel
+            label="RIVA" color="#00ffff" frameSrc={rivaFrame} active
             isPaused={rivaPaused} onTogglePause={() => togglePause('riva')}
-            onInteraction={handleInteraction} onGoto={handleGoto}
+            onInteraction={(t: string, x: number, y: number) => sendToWs(rivaWsRef, { type: t, x, y })}
+            onGoto={(url: string) => sendToWs(rivaWsRef, { type: 'goto', url })}
           />
         </div>
         <div className="flex flex-col flex-1 bg-black/20">
-          <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] bg-red-500/5 text-[#ff3333] border-b border-white/5">◈ COMPETITOR INTEL</div>
+          <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] bg-red-500/5 text-[#ff3333] border-b border-white/5">◈ COMPETITOR</div>
           <ThoughtLog thoughts={compThoughts} label="COMP" color="#ff3333" />
-          <BrowserPanel 
-            label="COMP" color="#ff3333" frameSrc="" active={false} status=""
+          <BrowserPanel
+            label="COMP" color="#ff3333" frameSrc={compFrame} active
             isPaused={compPaused} onTogglePause={() => togglePause('comp')}
+            onInteraction={(t: string, x: number, y: number) => sendToWs(compWsRef, { type: t, x, y })}
+            onGoto={(url: string) => sendToWs(compWsRef, { type: 'goto', url })}
           />
         </div>
       </div>
