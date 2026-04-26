@@ -34,9 +34,7 @@ function now() {
   });
 }
 
-// ---------------------------------------------------------------------------
 // ThoughtLog — per-browser AI stream
-// ---------------------------------------------------------------------------
 function ThoughtLog({
   thoughts, label, color,
 }: { thoughts: Thought[]; label: string; color: string }) {
@@ -64,9 +62,8 @@ function ThoughtLog({
   );
 }
 
-// ---------------------------------------------------------------------------
+
 // BrowserPanel
-// ---------------------------------------------------------------------------
 function BrowserPanel({
   label, color, frameSrc, active, isPaused, isComplete, wsActive,
   stuckMilestone, onTogglePause, onInteraction, onGoto, onRestart,

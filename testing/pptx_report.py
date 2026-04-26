@@ -31,9 +31,7 @@ GEMINI_KEY  = os.getenv("GEMINI_API_KEY")
 REPORTS_DIR = Path(__file__).parent / "reports"
 REPORTS_DIR.mkdir(exist_ok=True)
 
-# ---------------------------------------------------------------------------
-# Structural / neutral palette
-# ---------------------------------------------------------------------------
+
 DARK_BG    = RGBColor(0x07, 0x0D, 0x18)
 MID_BG     = RGBColor(0x0C, 0x18, 0x2C)
 CARD_BG    = RGBColor(0x0F, 0x1E, 0x36)
@@ -54,9 +52,6 @@ W = Inches(13.333)
 H = Inches(7.5)
 
 
-# ---------------------------------------------------------------------------
-# Brand color helpers
-# ---------------------------------------------------------------------------
 def _parse_hex(h: str):
     """Return (r, g, b) from '#RRGGBB' or '#RGB', or None on failure."""
     if not h:
@@ -94,9 +89,6 @@ def _make_theme(images: dict, domains: list) -> dict:
     return theme
 
 
-# ---------------------------------------------------------------------------
-# Low-level drawing helpers
-# ---------------------------------------------------------------------------
 def new_prs() -> Presentation:
     prs = Presentation()
     prs.slide_width  = W
@@ -196,9 +188,6 @@ def add_logo(slide, b64_uri: str, x, y, w=Inches(0.6), h=Inches(0.6)):
         pass
 
 
-# ---------------------------------------------------------------------------
-# Slide builders
-# ---------------------------------------------------------------------------
 def slide_title(prs, intel: dict, images: dict, theme: dict = None):
     """Split-panel title slide using each company's brand color."""
     domains = list(intel["domains"].keys())
@@ -559,9 +548,6 @@ def slide_action_items(prs, gtm: dict, theme: dict = None, domains: list = None)
              size=8, color=DIM_TEXT, align=PP_ALIGN.CENTER)
 
 
-# ---------------------------------------------------------------------------
-# GTM content generation
-# ---------------------------------------------------------------------------
 def generate_gtm(domains: list, intel: dict, focus: str = None) -> dict:
     client = genai.Client(api_key=GEMINI_KEY)
 
@@ -617,9 +603,6 @@ def generate_gtm(domains: list, intel: dict, focus: str = None) -> dict:
     raise RuntimeError("generate_gtm failed after 3 attempts")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 def main():
     missing = [k for k in ("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN", "GEMINI_API_KEY") if not os.getenv(k)]
     if missing:
