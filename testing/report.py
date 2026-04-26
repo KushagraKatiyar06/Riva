@@ -399,14 +399,14 @@ def render_html(intel: dict, images: dict) -> str:
         if items:
             name  = intel["domains"][d]["display_name"]
             color = domain_colors[d]
-            pills = "".join(
-                f'<span class="pill" style="background:{color}18;color:#1a1f2e;border:1px solid {color}55;">{str(i)[:60]}</span>'
+            items_html = "".join(
+                f'<div class="diff-item">{str(i)}</div>'
                 for i in items[:8]
             )
             unique_sections += (
                 f'<div class="unique-col">'
                 f'<div class="section-label">Only in {name}</div>'
-                f'<div class="pills">{pills}</div>'
+                f'<div class="diff-list">{items_html}</div>'
                 f'</div>'
             )
 
@@ -496,11 +496,8 @@ def render_html(intel: dict, images: dict) -> str:
     background: linear-gradient(to bottom, {c1}, {c2}); border-radius: 2px;
   }}
   .unique-grid {{ display: grid; grid-template-columns: {unique_grid_cols}; gap: 18px; margin-bottom: 14px; }}
-  .pills {{ display: flex; flex-wrap: wrap; gap: 5px; }}
-  .pill {{
-    border-radius: 20px; padding: 3px 9px; font-size: 11px; font-weight: 500;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px;
-  }}
+  .diff-list {{ display: flex; flex-direction: column; gap: 4px; }}
+  .diff-item {{ font-size: 11px; font-weight: 500; color: #1a1f2e; line-height: 1.5; }}
   .verdict-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }}
   .verdict-box {{
     background: #f8fafc; border-left: 3px solid #ddd;
