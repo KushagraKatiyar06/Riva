@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 
 export default function Home() {
   const router = useRouter();
-  const [url, setUrl] = useState('');
+  const [rivaUrl,  setRivaUrl]  = useState('');
+  const [compUrl,  setCompUrl]  = useState('');
 
   // SVG element refs for animation
   const rivaPupilRef = useRef<SVGGElement>(null);
@@ -79,8 +80,11 @@ export default function Home() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!url.trim()) return;
-    router.push(`/dashboard?url=${encodeURIComponent(url.trim())}`);
+    if (!rivaUrl.trim() && !compUrl.trim()) return;
+    const params = new URLSearchParams();
+    if (rivaUrl.trim()) params.set('riva', rivaUrl.trim());
+    if (compUrl.trim()) params.set('comp', compUrl.trim());
+    router.push(`/dashboard?${params.toString()}`);
   }
 
   return (
@@ -221,35 +225,66 @@ export default function Home() {
             Begin Analysis
           </h2>
           <p className="text-sm mb-10" style={{ color: 'rgba(255,255,255,0.4)', letterSpacing: '1px' }}>
-            Enter a URL and Riva will autonomously research and synthesize competitive intelligence.
+            Enter both URLs and Riva will autonomously research both in parallel.
           </p>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div
-              className="flex items-center border rounded-lg px-4 py-3 gap-3"
-              style={{ borderColor: 'rgba(0,255,255,0.25)', background: 'rgba(0,255,255,0.04)' }}
-            >
-              <span style={{ color: '#00ffff', opacity: 0.5, fontSize: 12, letterSpacing: 2 }}>URL</span>
-              <input
-                type="text"
-                value={url}
-                onChange={e => setUrl(e.target.value)}
-                placeholder="https://competitor.com"
-                className="flex-1 bg-transparent outline-none text-sm"
-                style={{ color: 'white', caretColor: '#00ffff' }}
-                autoComplete="off"
-                spellCheck={false}
-              />
+            {/* Your site — cyan */}
+            <div>
+              <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase" style={{ color: '#00ffff', opacity: 0.6 }}>
+                Your Site
+              </div>
+              <div
+                className="flex items-center border rounded-lg px-4 py-3 gap-3"
+                style={{ borderColor: 'rgba(0,255,255,0.25)', background: 'rgba(0,255,255,0.04)' }}
+              >
+                <span style={{ color: '#00ffff', opacity: 0.5, fontSize: 12, letterSpacing: 2 }}>URL</span>
+                <input
+                  type="text"
+                  value={rivaUrl}
+                  onChange={e => setRivaUrl(e.target.value)}
+                  placeholder="https://yoursite.com"
+                  className="flex-1 bg-transparent outline-none text-sm"
+                  style={{ color: 'white', caretColor: '#00ffff' }}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+            </div>
+
+            {/* Competitor — red */}
+            <div>
+              <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase flex items-center gap-2" style={{ color: '#ff3333', opacity: 0.6 }}>
+                Competitor
+                <span className="text-white/20 normal-case tracking-normal font-normal">(optional)</span>
+              </div>
+              <div
+                className="flex items-center border rounded-lg px-4 py-3 gap-3"
+                style={{ borderColor: 'rgba(255,51,51,0.25)', background: 'rgba(255,51,51,0.04)' }}
+              >
+                <span style={{ color: '#ff3333', opacity: 0.5, fontSize: 12, letterSpacing: 2 }}>URL</span>
+                <input
+                  type="text"
+                  value={compUrl}
+                  onChange={e => setCompUrl(e.target.value)}
+                  placeholder="https://competitor.com"
+                  className="flex-1 bg-transparent outline-none text-sm"
+                  style={{ color: 'white', caretColor: '#ff3333' }}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
             </div>
 
             <button
               type="submit"
-              className="w-full py-3 rounded-lg text-sm font-bold tracking-[4px] uppercase transition-all duration-200"
+              className="w-full py-3 rounded-lg text-sm font-bold tracking-[4px] uppercase transition-all duration-200 mt-2"
               style={{
                 background: 'linear-gradient(135deg, rgba(0,255,255,0.15) 0%, rgba(0,255,255,0.05) 100%)',
                 border: '1px solid rgba(0,255,255,0.4)',
                 color: '#00ffff',
                 boxShadow: '0 0 20px rgba(0,255,255,0.1)',
+                opacity: rivaUrl.trim() || compUrl.trim() ? 1 : 0.4,
               }}
               onMouseEnter={e => {
                 (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 30px rgba(0,255,255,0.3)';
@@ -260,12 +295,12 @@ export default function Home() {
                 (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(0,255,255,0.4)';
               }}
             >
-              Initiate Analysis
+              Initiate Dual Analysis
             </button>
           </form>
 
           <p className="mt-6 text-xs" style={{ color: 'rgba(255,255,255,0.2)', letterSpacing: '1px' }}>
-            The agent will navigate autonomously. You can intervene at any time via the live preview.
+            Both agents run simultaneously. You can intervene via the live preview on either panel.
           </p>
         </div>
       </section>
