@@ -142,9 +142,9 @@ export default function Home() {
                     style={{ transform: 'translateY(-100%)', transition: 'transform 0.15s ease-in-out' }}
                   />
                 </g>
-                <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#00ffff" strokeWidth="2" opacity="0.25" />
+                <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#4db8ff" strokeWidth="2" opacity="0.4" />
               </svg>
-              <p className="mt-3 text-xs font-bold tracking-[4px] uppercase" style={{ color: '#00ffff', textShadow: '0 0 10px #00ffff55' }}>
+              <p className="mt-3 text-xs font-bold tracking-[4px] uppercase" style={{ color: '#4db8ff', textShadow: '0 0 10px #4db8ff55' }}>
                 YOUR SITE
               </p>
             </div>
@@ -173,9 +173,9 @@ export default function Home() {
                     style={{ transform: 'translateY(-100%)', transition: 'transform 0.15s ease-in-out' }}
                   />
                 </g>
-                <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#ff3333" strokeWidth="2" opacity="0.25" />
+                <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#ff6b6b" strokeWidth="2" opacity="0.4" />
               </svg>
-              <p className="mt-3 text-xs font-bold tracking-[4px] uppercase" style={{ color: '#ff3333', textShadow: '0 0 10px #ff333355' }}>
+              <p className="mt-3 text-xs font-bold tracking-[4px] uppercase" style={{ color: '#ff6b6b', textShadow: '0 0 10px #ff6b6b55' }}>
                 COMPETITOR
               </p>
             </div>
@@ -230,21 +230,21 @@ export default function Home() {
             <div className="flex gap-4">
               {/* Your site — cyan */}
               <div className="flex-1">
-                <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase" style={{ color: '#00ffff', opacity: 0.6 }}>
+                <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase" style={{ color: '#4db8ff', opacity: 0.6 }}>
                   Your Site
                 </div>
                 <div
                   className="flex items-center border rounded-lg px-4 py-3 gap-3"
-                  style={{ borderColor: 'rgba(0,255,255,0.25)', background: 'rgba(0,255,255,0.04)' }}
+                  style={{ borderColor: 'rgba(77,184,255,0.55)', background: 'rgba(0,0,0,0.45)' }}
                 >
-                  <span style={{ color: '#00ffff', opacity: 0.5, fontSize: 12, letterSpacing: 2 }}>URL</span>
+                  <span style={{ color: '#4db8ff', opacity: 0.5, fontSize: 12, letterSpacing: 2 }}>URL</span>
                   <input
                     type="text"
                     value={rivaUrl}
                     onChange={e => setRivaUrl(e.target.value)}
                     placeholder="https://yoursite.com"
                     className="flex-1 bg-transparent outline-none text-sm"
-                    style={{ color: 'white', caretColor: '#00ffff' }}
+                    style={{ color: 'white', caretColor: '#4db8ff' }}
                     autoComplete="off"
                     spellCheck={false}
                   />
@@ -253,22 +253,22 @@ export default function Home() {
 
               {/* Competitor — red */}
               <div className="flex-1">
-                <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase flex items-center gap-2" style={{ color: '#ff3333', opacity: 0.6 }}>
+                <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase flex items-center gap-2" style={{ color: '#ff6b6b', opacity: 0.6 }}>
                   Competing Product
                   <span className="text-white/20 normal-case tracking-normal font-normal">(optional)</span>
                 </div>
                 <div
                   className="flex items-center border rounded-lg px-4 py-3 gap-3"
-                  style={{ borderColor: 'rgba(255,51,51,0.25)', background: 'rgba(255,51,51,0.04)' }}
+                  style={{ borderColor: 'rgba(255,107,107,0.55)', background: 'rgba(0,0,0,0.45)' }}
                 >
-                  <span style={{ color: '#ff3333', opacity: 0.5, fontSize: 12, letterSpacing: 2 }}>URL</span>
+                  <span style={{ color: '#ff6b6b', opacity: 0.5, fontSize: 12, letterSpacing: 2 }}>URL</span>
                   <input
                     type="text"
                     value={compUrl}
                     onChange={e => setCompUrl(e.target.value)}
                     placeholder="https://competitor.com"
                     className="flex-1 bg-transparent outline-none text-sm"
-                    style={{ color: 'white', caretColor: '#ff3333' }}
+                    style={{ color: 'white', caretColor: '#ff6b6b' }}
                     autoComplete="off"
                     spellCheck={false}
                   />
