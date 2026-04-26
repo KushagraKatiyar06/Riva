@@ -882,9 +882,9 @@ function DashboardContent() {
             </button>
 
             <div className="flex items-center gap-3" style={{ fontSize: 10, fontFamily: "'Fira Code', monospace" }}>
-              {rivaUrl && <span style={{ color: 'rgba(77,184,255,0.7)' }} className="truncate max-w-[160px]">{hostname(rivaUrl)}</span>}
+              {rivaUrl && <span style={{ color: 'rgba(77,184,255,0.7)' }} className="truncate max-w-[80px] sm:max-w-[160px]">{hostname(rivaUrl)}</span>}
               {rivaUrl && compUrl && <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11 }}>vs</span>}
-              {compUrl && <span style={{ color: 'rgba(255,107,107,0.7)' }} className="truncate max-w-[160px]">{hostname(compUrl)}</span>}
+              {compUrl && <span style={{ color: 'rgba(255,107,107,0.7)' }} className="truncate max-w-[80px] sm:max-w-[160px]">{hostname(compUrl)}</span>}
             </div>
 
             <button
@@ -927,8 +927,8 @@ function DashboardContent() {
               </div>
             )}
 
-            {/* Browser panels */}
-            <div className="flex-1 flex min-h-0 gap-2 pb-2">
+            {/* Browser panels — stack vertically on small screens */}
+            <div className="flex-1 flex flex-col md:flex-row min-h-0 gap-2 pb-2">
               {rivaUrl && (
                 <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
                   style={{ border: `1.5px solid ${RIVA_COLOR}` }}>
@@ -959,7 +959,7 @@ function DashboardContent() {
           </div>
 
           {/* ── Bottom: inference logs + chat ── */}
-          <div className="flex shrink-0 rounded-lg overflow-hidden mb-3"
+          <div className="flex flex-col sm:flex-row shrink-0 rounded-lg overflow-hidden mb-3"
             style={{
               height: bottomExpanded ? 400 : 220,
               transition: 'height 0.25s ease',

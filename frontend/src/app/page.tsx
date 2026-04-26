@@ -107,8 +107,8 @@ export default function Home() {
 
         <div className="flex flex-col items-center relative z-10">
           <h1
-            className="text-7xl font-thin tracking-[20px] uppercase mb-2"
-            style={{ color: '#c8aaff', textShadow: '0 0 40px rgba(160,100,255,0.4)', letterSpacing: '20px' }}
+            className="text-4xl sm:text-7xl font-thin uppercase mb-2"
+            style={{ color: '#c8aaff', textShadow: '0 0 40px rgba(160,100,255,0.4)', letterSpacing: 'clamp(8px, 3vw, 20px)' }}
           >
             RIVA
           </h1>
@@ -117,9 +117,9 @@ export default function Home() {
           </p>
 
           {/* Dual eyes */}
-          <div className="flex gap-24 mb-14">
+          <div className="flex gap-8 sm:gap-24 mb-14">
             {/* Riva eye — cyan */}
-            <div className="w-64 text-center">
+            <div className="w-36 sm:w-64 text-center">
               <svg viewBox="0 0 200 120" overflow="visible">
                 <defs>
                   <clipPath id="eye-clip-r">
@@ -150,7 +150,7 @@ export default function Home() {
             </div>
 
             {/* Competitor eye — red */}
-            <div className="w-64 text-center">
+            <div className="w-36 sm:w-64 text-center">
               <svg viewBox="0 0 200 120" overflow="visible">
                 <defs>
                   <clipPath id="eye-clip-c">
@@ -217,7 +217,7 @@ export default function Home() {
       {/* ── INPUT SECTION ──────────────────────────────────────── */}
       <section
         id="input-section"
-        className="min-h-screen flex flex-col items-center justify-center px-8"
+        className="min-h-screen flex flex-col items-center justify-center px-4 sm:px-8"
         style={{ background: 'radial-gradient(ellipse at 50% 50%, #1a1040 0%, #0d0820 50%, #060412 100%)' }}
       >
         <div className="w-full max-w-3xl">
@@ -226,8 +226,8 @@ export default function Home() {
           </p>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            {/* Side-by-side inputs */}
-            <div className="flex gap-4">
+            {/* Inputs — side by side on sm+, stacked on mobile */}
+            <div className="flex flex-col sm:flex-row gap-4">
               {/* Your site — cyan */}
               <div className="flex-1">
                 <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase" style={{ color: '#4db8ff', opacity: 0.6 }}>
