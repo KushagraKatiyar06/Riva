@@ -299,8 +299,10 @@ _sessions: dict[str, _Session] = {}
 # Chrome CDP helpers — used as a fallback when Playwright's automation flags trigger bot protection
 def _launch_bare_chrome(target_url: str, debug_port: int, user_data_dir: str):
     """Launch Chrome with no automation flags. Used to bypass Cloudflare Turnstile."""
-    chrome_exe = shutil.which("chrome") or shutil.which("google-chrome")
+    import glob
+    chrome_exe = shutil.which("chrome") or shutil.which("google-chrome") or shutil.which("chromium-browser") or shutil.which("chromium")
     if not chrome_exe:
+        # Windows system Chrome
         for path in [
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -308,6 +310,16 @@ def _launch_bare_chrome(target_url: str, debug_port: int, user_data_dir: str):
         ]:
             if os.path.exists(path):
                 chrome_exe = path
+                break
+    if not chrome_exe:
+        # Linux — fall back to Playwright's own Chromium binary
+        for pattern in [
+            "/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
+            os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux/chrome"),
+        ]:
+            matches = sorted(glob.glob(pattern))
+            if matches:
+                chrome_exe = matches[-1]  # latest version
                 break
     if not chrome_exe:
         raise RuntimeError("Chrome executable not found")
@@ -1563,3 +1575,4 @@ async def pipeline_websocket(
         pass
     finally:
         stop_evt.set()
+        _sessions.pop(session, None)
