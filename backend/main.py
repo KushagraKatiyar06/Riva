@@ -49,7 +49,7 @@ if _TESTING_DIR not in sys.path:
 try:
     from report import generate_intel, render_html, scrape_brand_assets
     from pptx_report import (
-        generate_gtm, new_prs,
+        generate_gtm, new_prs, render_preview_html,
         slide_title, slide_exec_summary, slide_pricing,
         slide_differentiators, slide_gtm, slide_action_items,
     )
@@ -417,6 +417,19 @@ def get_session(session_id: str):
             (session_id,),
         ).fetchall()
         return {"session": dict(session), "intel": [dict(i) for i in intel]}
+
+
+@app.get("/check-vectorized")
+def check_vectorized(domain: str = ""):
+    """Return whether a domain already has extracted/vectorized data."""
+    if not domain:
+        return {"vectorized": False}
+    # Strip www. to match the normalized domain used during extraction
+    domain = re.sub(r'^www\.', '', domain.lower().strip())
+    domain_dir = EXTRACTS_DIR / domain
+    if domain_dir.exists() and list(domain_dir.glob("*.txt")):
+        return {"vectorized": True}
+    return {"vectorized": False}
 
 
 @app.get("/reports/{filename}")
@@ -1151,6 +1164,14 @@ async def browse_websocket(
                     elif dtype == "resume":
                         pause_event.set()
                         thought_q.put({"text": "Agent resuming...", "state": "info"})
+                    elif dtype == "skip":
+                        skip_domain = re.sub(r'^www\.', '', urlparse(target_url).hostname or "unknown")
+                        thought_q.put({"text": "Skipping browse — using cached extracts.", "state": "complete"})
+                        stop_event.set()
+                        pause_event.set()
+                        if session and session in _sessions:
+                            _sessions[session].mark_complete(skip_domain)
+                        thought_q.put({"type": "browse_complete"})
                     else:
                         action_q.put(data)
                 except Exception:
@@ -1176,7 +1197,7 @@ def _html_to_pdf(html_path: Path, log_fn=None) -> Path:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
-            page = browser.new_page()
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
             page.goto(file_url, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(1500)  # let fonts/images settle
             page.pdf(
@@ -1357,7 +1378,9 @@ async def pipeline_websocket(
                 log(f"Report ready: {pdf_path.name}", "success")
                 out_q.put({
                     "type": "report_ready", "report_type": "pdf",
-                    "url": f"/reports/{pdf_path.name}", "filename": pdf_path.name,
+                    "url": f"/reports/{pdf_path.name}",
+                    "preview_url": f"/reports/{html_path.name}",
+                    "filename": pdf_path.name,
                 })
                 bot("One-pager PDF is ready! Click **View Report** in the pipeline bar.")
             except Exception as e:
@@ -1407,7 +1430,7 @@ async def pipeline_websocket(
                     log(f"  Slide: {label}", "info")
                     fn(*args)
 
-                log("Step 5/5 — Saving deck to disk...", "info")
+                log("Step 5/5 — Saving deck and preview to disk...", "info")
                 names    = "_vs_".join(
                     intel["domains"][d]["display_name"].lower().replace(" ", "-")
                     for d in all_domains
@@ -1416,9 +1439,20 @@ async def pipeline_websocket(
                 out_path = REPORTS_DIR / f"riva_deck_{names}_{ts}.pptx"
                 prs_obj.save(str(out_path))
                 log(f"Deck saved: {out_path.name} ({len(prs_obj.slides)} slides)", "success")
+                preview_url_val = f"/reports/{out_path.name}"  # fallback: download link
+                try:
+                    preview_path = REPORTS_DIR / f"riva_deck_{names}_{ts}_preview.html"
+                    preview_html = render_preview_html(intel, gtm, images, theme)
+                    preview_path.write_text(preview_html, encoding="utf-8")
+                    preview_url_val = f"/reports/{preview_path.name}"
+                    log(f"Preview HTML saved: {preview_path.name}", "info")
+                except Exception as prev_err:
+                    log(f"Preview generation failed (non-fatal): {prev_err}", "error")
                 out_q.put({
                     "type": "report_ready", "report_type": "pptx",
-                    "url": f"/reports/{out_path.name}", "filename": out_path.name,
+                    "url": f"/reports/{out_path.name}",
+                    "preview_url": preview_url_val,
+                    "filename": out_path.name,
                 })
                 bot("Deck is ready! Click **View Report** to download it.")
             except Exception as e:

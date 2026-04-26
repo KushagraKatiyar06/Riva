@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Play, Pause, ArrowRight, X, Send, Download, Maximize2, Minimize2 } from 'lucide-react';
+import { Play, Pause, ArrowRight, Send, Download, Maximize2, Minimize2 } from 'lucide-react';
 
 type Thought     = { text: string; state: string; ts: string };
 type PipelineLog = { text: string; state: string; ts: string };
@@ -244,7 +244,7 @@ function MiniLog({
 // ---------------------------------------------------------------------------
 function BrowserPanel({
   label, frameSrc, active, isPaused, isComplete, wsActive,
-  stuckMilestone, onTogglePause, onInteraction, onGoto, onRestart,
+  stuckMilestone, canSkip, onTogglePause, onSkip, onInteraction, onGoto, onRestart,
 }: any) {
   const [manualUrl, setManualUrl] = useState('');
 
@@ -272,18 +272,35 @@ function BrowserPanel({
             ✓ complete
           </div>
         ) : (
-          <button onClick={onTogglePause}
-            className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
-            style={{
-              background: isPaused ? 'rgba(109,192,138,0.15)' : 'rgba(255,255,255,0.92)',
-              color:      isPaused ? '#6dc08a' : '#140e28',
-              border:     `1px solid ${isPaused ? 'rgba(109,192,138,0.5)' : 'rgba(255,255,255,0.8)'}`,
-              fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
-              fontFamily: "'DM Sans', sans-serif",
-            }}>
-            {isPaused ? <Play size={9} fill="currentColor" /> : <Pause size={9} fill="currentColor" />}
-            {isPaused ? 'resume' : 'pause'}
-          </button>
+          <>
+            <button onClick={onTogglePause}
+              className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
+              style={{
+                background: isPaused ? 'rgba(109,192,138,0.15)' : 'rgba(255,255,255,0.92)',
+                color:      isPaused ? '#6dc08a' : '#140e28',
+                border:     `1px solid ${isPaused ? 'rgba(109,192,138,0.5)' : 'rgba(255,255,255,0.8)'}`,
+                fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
+                fontFamily: "'DM Sans', sans-serif",
+              }}>
+              {isPaused ? <Play size={9} fill="currentColor" /> : <Pause size={9} fill="currentColor" />}
+              {isPaused ? 'resume' : 'pause'}
+            </button>
+            <button onClick={canSkip ? onSkip : undefined}
+              className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
+              disabled={!canSkip}
+              style={{
+                background: 'rgba(255,255,255,0.92)',
+                color: '#140e28',
+                border: '1px solid rgba(255,255,255,0.8)',
+                fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
+                fontFamily: "'DM Sans', sans-serif",
+                opacity: canSkip ? 1 : 0.35,
+                cursor: canSkip ? 'pointer' : 'not-allowed',
+              }}>
+              <ArrowRight size={9} />
+              skip
+            </button>
+          </>
         )}
         <div className="flex-1 flex gap-2">
           <input className="flex-1 rounded px-2 py-1 outline-none"
@@ -358,12 +375,11 @@ function BrowserPanel({
 // InferenceLogPanel
 // ---------------------------------------------------------------------------
 function InferenceLogPanel({
-  logs, status, reportReady, onViewReport, bottomExpanded, onToggleBottom,
+  logs, status, hasReports, bottomExpanded, onToggleBottom,
 }: {
   logs: PipelineLog[];
   status: string;
-  reportReady: boolean;
-  onViewReport: () => void;
+  hasReports: boolean;
   bottomExpanded: boolean;
   onToggleBottom: () => void;
 }) {
@@ -389,15 +405,13 @@ function InferenceLogPanel({
           </span>
         </div>
         <div className="flex items-center gap-2">
-          {reportReady && (
-            <button onClick={onViewReport}
-              className="flex items-center gap-1.5 px-2 py-1 rounded transition-all animate-pulse"
-              style={{ background: 'rgba(109,192,138,0.1)', color: '#6dc08a',
-                border: '1px solid rgba(109,192,138,0.25)', fontSize: 9,
-                fontFamily: "'DM Sans', sans-serif", letterSpacing: '0.5px' }}>
-              <Download size={9} />
-              view report
-            </button>
+          {hasReports && (
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded"
+              style={{ background: 'rgba(109,192,138,0.08)', color: '#6dc08a',
+                border: '1px solid rgba(109,192,138,0.2)', fontSize: 8,
+                fontFamily: "'DM Sans', sans-serif" }}>
+              ↓ report ready
+            </div>
           )}
           <button onClick={onToggleBottom} style={{ color: 'rgba(255,255,255,0.25)' }}
             className="hover:text-white/60 transition-colors p-0.5">
@@ -531,52 +545,82 @@ function InlineChatPanel({
 // ---------------------------------------------------------------------------
 // Report modal
 // ---------------------------------------------------------------------------
-function ReportModal({
-  reportUrl, reportType, onClose,
-}: { reportUrl: string; reportType: 'pdf' | 'pptx'; onClose: () => void }) {
-  const fullUrl = `http://localhost:8000${reportUrl}`;
+type ReportEntry = { type: 'pdf' | 'pptx'; url: string; previewUrl: string; filename: string };
+
+function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
+  const [minimized, setMinimized] = useState(false);
+
+  if (reports.length === 0) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-auto py-6 px-4"
-      style={{ background: 'rgba(0,0,0,0.88)' }}
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="relative w-full flex flex-col rounded-xl overflow-hidden shadow-2xl"
-        style={{ maxWidth: 960, maxHeight: '90vh', background: '#100e24',
-          border: '1px solid rgba(149,128,200,0.18)' }}>
-        <div className="flex items-center justify-between px-4 py-3 border-b shrink-0"
-          style={{ borderColor: 'rgba(149,128,200,0.1)' }}>
-          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: '1.5px', color: '#9580c8',
+    <div className="shrink-0 rounded-lg overflow-hidden"
+      style={{ border: '1px solid rgba(149,128,200,0.2)', background: '#0a0820',
+        marginBottom: 12, transition: 'all 0.25s ease' }}>
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 border-b"
+        style={{ borderColor: 'rgba(149,128,200,0.12)', background: 'rgba(0,0,0,0.3)' }}>
+        <div className="flex items-center gap-3">
+          <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#9580c8',
+            fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase' }}>
+            Reports
+          </span>
+          <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.25)',
             fontFamily: "'DM Sans', sans-serif" }}>
-            {reportType === 'pdf' ? 'one-pager report' : 'powerpoint deck'}
-          </div>
-          <div className="flex items-center gap-2">
-            <a href={fullUrl} target="_blank" rel="noreferrer"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded transition-all"
-              style={{ background: 'rgba(149,128,200,0.1)', color: '#9580c8',
-                border: '1px solid rgba(149,128,200,0.22)', fontSize: 9, fontFamily: "'DM Sans', sans-serif" }}>
-              open in new tab
-            </a>
-            <button onClick={onClose} className="p-1.5 rounded transition-colors"
-              style={{ color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.1)' }}>
-              <X size={14} />
-            </button>
-          </div>
+            {reports.length} ready
+          </span>
         </div>
-        <div className="flex flex-col items-center justify-center gap-6 py-16">
-          <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, letterSpacing: '1.5px',
-            fontFamily: "'DM Sans', sans-serif" }}>
-            {reportType === 'pdf' ? 'pdf report ready' : 'powerpoint deck ready'}
-          </div>
-          <a href={fullUrl} target="_blank" rel="noreferrer"
-            className="flex items-center gap-2 px-6 py-3 rounded-lg transition-all"
-            style={{ background: 'rgba(149,128,200,0.1)', color: '#b0a0d8',
-              border: '1px solid rgba(149,128,200,0.3)', fontSize: 13, fontWeight: 500,
-              fontFamily: "'DM Sans', sans-serif" }}>
-            <Download size={18} />
-            {reportType === 'pdf' ? 'open / download pdf' : 'download powerpoint'}
-          </a>
-        </div>
+        <button onClick={() => setMinimized(v => !v)}
+          className="p-1 transition-colors"
+          style={{ color: 'rgba(255,255,255,0.3)' }}>
+          {minimized ? <Maximize2 size={11} /> : <Minimize2 size={11} />}
+        </button>
       </div>
+
+      {!minimized && (
+        <div className="flex" style={{ height: 560, gap: 1 }}>
+          {reports.map((r, i) => {
+            const fullUrl    = `http://localhost:8000${r.url}`;
+            const previewUrl = `http://localhost:8000${r.previewUrl}`;
+            return (
+              <div key={i} className="flex flex-col flex-1 min-w-0"
+                style={{ borderRight: i < reports.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
+                {/* Per-report header */}
+                <div className="flex items-center justify-between px-3 py-1.5 shrink-0"
+                  style={{ background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)',
+                    fontFamily: "'DM Sans', sans-serif", letterSpacing: '1px' }}>
+                    {r.type === 'pdf' ? 'one-pager report' : 'powerpoint deck'}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <a href={previewUrl} target="_blank" rel="noreferrer"
+                      className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
+                      style={{ background: 'rgba(149,128,200,0.08)', color: '#9580c8',
+                        border: '1px solid rgba(149,128,200,0.18)', fontSize: 8,
+                        fontFamily: "'DM Sans', sans-serif", textDecoration: 'none' }}>
+                      open tab
+                    </a>
+                    <a href={fullUrl} download={r.filename}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
+                      style={{ background: 'rgba(109,192,138,0.08)', color: '#6dc08a',
+                        border: '1px solid rgba(109,192,138,0.2)', fontSize: 8,
+                        fontFamily: "'DM Sans', sans-serif", textDecoration: 'none' }}>
+                      <Download size={8} />
+                      download
+                    </a>
+                  </div>
+                </div>
+                {/* Preview iframe */}
+                <iframe
+                  src={previewUrl}
+                  className="flex-1 w-full border-0"
+                  title={`${r.type} preview`}
+                  style={{ background: r.type === 'pdf' ? 'white' : '#050912' }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -630,8 +674,7 @@ function DashboardContent() {
       if (saved.compComplete)   setCompComplete(saved.compComplete);
       if (saved.pipelineLogs)   setPipelineLogs(saved.pipelineLogs);
       if (saved.pipelineStatus) setPipelineStatus(saved.pipelineStatus);
-      if (saved.reportUrl)      setReportUrl(saved.reportUrl);
-      if (saved.reportType)     setReportType(saved.reportType);
+      if (saved.reports?.length)  setReports(saved.reports);
       if (saved.chatMessages)   setChatMessages(saved.chatMessages);
       setRivaWsState('closed');
       setCompWsState('closed');
@@ -647,11 +690,12 @@ function DashboardContent() {
   const [pipelineLogs,    setPipelineLogs]    = useState<PipelineLog[]>([]);
   const [pipelineStatus,  setPipelineStatus]  = useState<'waiting'|'vectorizing'|'ready'>('waiting');
 
-  const [reportUrl,       setReportUrl]       = useState<string | null>(null);
-  const [reportType,      setReportType]      = useState<'pdf'|'pptx'|null>(null);
-  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reports, setReports] = useState<ReportEntry[]>([]);
 
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
+
+  const [rivaCanSkip, setRivaCanSkip] = useState(false);
+  const [compCanSkip, setCompCanSkip] = useState(false);
 
   const [logsExpanded,   setLogsExpanded]   = useState(false);
   const [bottomExpanded, setBottomExpanded] = useState(false);
@@ -661,11 +705,29 @@ function DashboardContent() {
     try {
       sessionStorage.setItem(storageKey, JSON.stringify({
         sessionId, rivaComplete, compComplete, rivaFrame, compFrame,
-        chatMessages, pipelineLogs, pipelineStatus, reportUrl, reportType,
+        chatMessages, pipelineLogs, pipelineStatus, reports,
       }));
     } catch {}
   }, [sessionId, rivaComplete, compComplete, rivaFrame, compFrame,
-      chatMessages, pipelineLogs, pipelineStatus, reportUrl, reportType]); // eslint-disable-line react-hooks/exhaustive-deps
+      chatMessages, pipelineLogs, pipelineStatus, reports]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Check if each domain is already vectorized (enables skip button)
+  useEffect(() => {
+    function checkDomain(url: string, setter: (v: boolean) => void) {
+      if (!url) return;
+      try {
+        const domain = new URL(url.startsWith('http') ? url : 'https://' + url).hostname
+          .replace(/^www\./, '');
+        fetch(`http://localhost:8000/check-vectorized?domain=${encodeURIComponent(domain)}`)
+          .then(r => r.json())
+          .then(d => setter(!!d.vectorized))
+          .catch(() => {});
+      } catch {}
+    }
+    checkDomain(rivaUrl, setRivaCanSkip);
+    checkDomain(compUrl, setCompCanSkip);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rivaUrl, compUrl]);
 
   const rivaWsRef     = useRef<WebSocket | null>(null);
   const compWsRef     = useRef<WebSocket | null>(null);
@@ -682,7 +744,14 @@ function DashboardContent() {
       if (msg.type === 'log')           setPipelineLogs(p => [...p, { text: msg.text, state: msg.state, ts: now() }]);
       else if (msg.type === 'chat')     setChatMessages(p => [...p, { role: 'assistant', text: msg.text, ts: now() }]);
       else if (msg.type === 'status')   setPipelineStatus(msg.value);
-      else if (msg.type === 'report_ready') { setReportUrl(msg.url); setReportType(msg.report_type); }
+      else if (msg.type === 'report_ready') {
+        setReports(prev => [...prev, {
+          type: msg.report_type as 'pdf' | 'pptx',
+          url: msg.url,
+          previewUrl: msg.preview_url || msg.url,
+          filename: msg.filename,
+        }]);
+      }
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -736,6 +805,10 @@ function DashboardContent() {
       const next = !compPaused; setCompPaused(next);
       sendToWs(compWsRef, { type: next ? 'pause' : 'resume' });
     }
+  }
+
+  function skipBrowse(side: 'riva' | 'comp') {
+    sendToWs(side === 'riva' ? rivaWsRef : compWsRef, { type: 'skip' });
   }
 
   function restartBrowse(url: string, side: 'riva' | 'comp') {
@@ -861,8 +934,9 @@ function DashboardContent() {
                   style={{ border: `1.5px solid ${RIVA_COLOR}` }}>
                   <BrowserPanel label="riva" frameSrc={rivaFrame} active
                     isPaused={rivaPaused} isComplete={rivaComplete} wsActive={rivaWsState === 'open'}
-                    stuckMilestone={rivaStuckMilestone}
+                    stuckMilestone={rivaStuckMilestone} canSkip={rivaCanSkip}
                     onTogglePause={() => togglePause('riva')}
+                    onSkip={() => skipBrowse('riva')}
                     onInteraction={(t: string, x: number, y: number) => sendToWs(rivaWsRef, { type: t, x, y })}
                     onGoto={(url: string) => { setRivaStuckMilestone(null); sendToWs(rivaWsRef, { type: 'goto', url }); }}
                     onRestart={(url: string) => restartBrowse(url, 'riva')} />
@@ -873,8 +947,9 @@ function DashboardContent() {
                   style={{ border: `1.5px solid ${COMP_COLOR}` }}>
                   <BrowserPanel label="comp" frameSrc={compFrame} active
                     isPaused={compPaused} isComplete={compComplete} wsActive={compWsState === 'open'}
-                    stuckMilestone={compStuckMilestone}
+                    stuckMilestone={compStuckMilestone} canSkip={compCanSkip}
                     onTogglePause={() => togglePause('comp')}
+                    onSkip={() => skipBrowse('comp')}
                     onInteraction={(t: string, x: number, y: number) => sendToWs(compWsRef, { type: t, x, y })}
                     onGoto={(url: string) => { setCompStuckMilestone(null); sendToWs(compWsRef, { type: 'goto', url }); }}
                     onRestart={(url: string) => restartBrowse(url, 'comp')} />
@@ -892,7 +967,7 @@ function DashboardContent() {
             }}>
             <div className="flex-1 min-w-0">
               <InferenceLogPanel logs={pipelineLogs} status={pipelineStatus}
-                reportReady={!!reportUrl} onViewReport={() => setReportModalOpen(true)}
+                hasReports={reports.length > 0}
                 bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
             </div>
             <div className="flex-1 min-w-0">
@@ -901,12 +976,11 @@ function DashboardContent() {
                 bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
             </div>
           </div>
-        </div>
 
-        {reportModalOpen && reportUrl && reportType && (
-          <ReportModal reportUrl={reportUrl} reportType={reportType as 'pdf'|'pptx'}
-            onClose={() => setReportModalOpen(false)} />
-        )}
+          {reports.length > 0 && (
+            <ReportPreviewSection reports={reports} />
+          )}
+        </div>
       </div>
     </>
   );

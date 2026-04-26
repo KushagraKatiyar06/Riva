@@ -37,7 +37,7 @@ MID_BG     = RGBColor(0x0C, 0x18, 0x2C)
 CARD_BG    = RGBColor(0x0F, 0x1E, 0x36)
 WHITE      = RGBColor(0xFF, 0xFF, 0xFF)
 LIGHT_TEXT = RGBColor(0xC8, 0xD8, 0xE8)
-DIM_TEXT   = RGBColor(0x4A, 0x68, 0x88)
+DIM_TEXT   = RGBColor(0x8A, 0xA4, 0xBC)
 RED        = RGBColor(0xE0, 0x50, 0x50)
 
 # Fallback accent colors when brand color not found
@@ -392,7 +392,7 @@ def slide_pricing(prs, intel: dict, theme: dict = None, images: dict = None):
             highlights = [str(h) for h in (tier.get("highlights") or [])[:3]]
             add_text_lines(slide, highlights,
                            x + Inches(0.15), y + Inches(0.82), col_w - Inches(0.4), Inches(0.72),
-                           size=10, color=DIM_TEXT, max_items=3)
+                           size=10, color=LIGHT_TEXT, max_items=3)
             y += tier_h + Inches(0.1)
 
 
@@ -426,13 +426,13 @@ def slide_differentiators(prs, intel: dict, theme: dict = None, images: dict = N
 
         y = Inches(1.05)
         for item in items:
-            add_rect(slide, x, y, col_w - Inches(0.2), Inches(0.52), fill=CARD_BG)
-            add_rect(slide, x, y, Inches(0.04), Inches(0.52), fill=t["accent"])
+            add_rect(slide, x, y, col_w - Inches(0.2), Inches(0.58), fill=CARD_BG)
+            add_rect(slide, x, y, Inches(0.04), Inches(0.58), fill=t["accent"])
             add_text(slide, item,
-                     x + Inches(0.15), y + Inches(0.1),
-                     col_w - Inches(0.45), Inches(0.36),
-                     size=11, color=WHITE, max_chars=90)
-            y += Inches(0.58)
+                     x + Inches(0.15), y + Inches(0.08),
+                     col_w - Inches(0.45), Inches(0.46),
+                     size=10, color=WHITE, max_chars=100)
+            y += Inches(0.64)
 
         # Weaknesses at bottom
         add_text(slide, "GAPS TO ADDRESS",
@@ -468,7 +468,7 @@ def slide_gtm(prs, intel: dict, gtm: dict, theme: dict = None, images: dict = No
              size=8, bold=True, color=DIM_TEXT)
     add_text(slide, comparison.get("pricing_verdict", ""),
              Inches(0.5), Inches(0.96), Inches(5.8), Inches(1.0),
-             size=12, color=WHITE, max_chars=200)
+             size=12, color=WHITE, max_chars=260)
 
     # Positioning verdict card
     add_rect(slide, Inches(6.9), Inches(0.6), Inches(6.1), Inches(1.5), fill=CARD_BG)
@@ -478,7 +478,7 @@ def slide_gtm(prs, intel: dict, gtm: dict, theme: dict = None, images: dict = No
              size=8, bold=True, color=DIM_TEXT)
     add_text(slide, comparison.get("positioning_verdict", ""),
              Inches(7.1), Inches(0.96), Inches(5.8), Inches(1.0),
-             size=12, color=WHITE, max_chars=200)
+             size=12, color=WHITE, max_chars=260)
 
     # Key messages
     add_text(slide, "KEY MESSAGES",
@@ -504,7 +504,7 @@ def slide_gtm(prs, intel: dict, gtm: dict, theme: dict = None, images: dict = No
              size=8, bold=True, color=t0["accent"])
     add_text(slide, comparison.get("recommendation", ""),
              Inches(0.5), Inches(5.22), Inches(12.3), Inches(1.9),
-             size=14, color=WHITE, max_chars=350)
+             size=13, color=WHITE, max_chars=480)
 
 
 def slide_action_items(prs, gtm: dict, theme: dict = None, domains: list = None):
@@ -532,16 +532,16 @@ def slide_action_items(prs, gtm: dict, theme: dict = None, domains: list = None)
         y = Inches(0.65)
         offset = 0 if x == x_positions[0] else mid
         for j, action in enumerate(col_items):
-            item_h = Inches(0.82)
+            item_h = Inches(0.92)
             add_rect(slide, x, y, Inches(6.1), item_h, fill=CARD_BG)
             add_rect(slide, x, y, Inches(0.48), item_h, fill=accent)
             add_text(slide, str(j + 1 + offset),
-                     x + Inches(0.08), y + Inches(0.2), Inches(0.34), Inches(0.42),
+                     x + Inches(0.08), y + Inches(0.22), Inches(0.34), Inches(0.48),
                      size=14, bold=True, color=DARK_BG, align=PP_ALIGN.CENTER)
             add_text(slide, action,
-                     x + Inches(0.58), y + Inches(0.18), Inches(5.4), Inches(0.55),
-                     size=11, color=WHITE, max_chars=120)
-            y += item_h + Inches(0.09)
+                     x + Inches(0.58), y + Inches(0.14), Inches(5.4), Inches(0.68),
+                     size=11, color=WHITE, max_chars=150)
+            y += item_h + Inches(0.08)
 
     add_text(slide, "RIVA COMPETITIVE INTELLIGENCE  ·  CONFIDENTIAL",
              Inches(0), Inches(7.18), W, Inches(0.28),
@@ -601,6 +601,183 @@ def generate_gtm(domains: list, intel: dict, focus: str = None) -> dict:
                 raise
             time.sleep(5)
     raise RuntimeError("generate_gtm failed after 3 attempts")
+
+
+def render_preview_html(intel: dict, gtm: dict, images: dict, theme: dict) -> str:
+    """Generate a slide-deck HTML preview of the PPTX content — shown in the frontend iframe."""
+    domains    = list(intel["domains"].keys())
+    comparison = intel["comparison"]
+    date_str   = datetime.now().strftime("%B %d, %Y")
+
+    def _hex(d: str) -> str:
+        t = theme.get(d, {})
+        acc = t.get("accent")
+        if acc is not None:
+            return f"#{str(acc)}"  # str(RGBColor) → 'RRGGBB' uppercase hex
+        return (images.get(d) or {}).get("brand_color") or "#4db8ff"
+
+    def _dark_hex(d: str) -> str:
+        t = theme.get(d, {})
+        dk = t.get("dark")
+        if dk is not None:
+            return f"#{str(dk)}"
+        return "#0f1e36"
+
+    colors = {d: _hex(d)      for d in domains}
+    darks  = {d: _dark_hex(d) for d in domains}
+    c0     = colors.get(domains[0], "#4db8ff") if domains          else "#4db8ff"
+    c1     = colors.get(domains[1], "#ff6b6b") if len(domains) > 1 else "#ff6b6b"
+    n0     = intel["domains"][domains[0]]["display_name"] if domains          else ""
+    n1     = intel["domains"][domains[1]]["display_name"] if len(domains) > 1 else ""
+
+    def _li(items):
+        return "".join(f"<li>{str(i)}</li>" for i in items if i)
+
+    d0 = intel["domains"].get(domains[0], {}) if domains          else {}
+    d1 = intel["domains"].get(domains[1], {}) if len(domains) > 1 else {}
+
+    # Slide 1 — Title
+    s1 = f'''<div class="slide s-title">
+      <div class="half" style="background:{darks.get(domains[0] if domains else "","#0f1e36")};border-right:2px solid {c0}44;">
+        <div class="brand-bar" style="background:{c0};"></div>
+        <div class="hn" style="color:{c0};">{n0}</div>
+        <div class="ht">{d0.get("tagline","")[:130]}</div>
+      </div>
+      <div class="half" style="background:{darks.get(domains[1] if len(domains)>1 else "","#0f1e36")};">
+        <div class="brand-bar" style="background:{c1};"></div>
+        <div class="hn" style="color:{c1};">{n1}</div>
+        <div class="ht">{d1.get("tagline","")[:130]}</div>
+      </div>
+      <div class="tc">
+        <div class="tl">RIVA COMPETITIVE INTELLIGENCE</div>
+        <div class="tm">Competitive Analysis</div>
+        <div class="tv">{n0} &times; {n1}</div>
+        <div class="td">{date_str}</div>
+      </div>
+    </div>'''
+
+    # Slide 2 — Executive Summary
+    ec = ""
+    for d in domains:
+        info = intel["domains"][d]; c = colors[d]
+        ec += f'''<div class="ec" style="border-top:3px solid {c};">
+          <div class="cn" style="color:{c};">{info["display_name"]}</div>
+          <div class="cs">{info.get("target_audience","")}</div>
+          <div class="lbl">TOP FEATURES</div><ul class="il">{_li(info.get("top_features",[])[:5])}</ul>
+          <div class="lbl" style="color:#6dc08a;">STRENGTHS</div><ul class="il">{_li(info.get("strengths",[])[:3])}</ul>
+          <div class="lbl" style="color:#e05555;">GAPS</div><ul class="il">{_li(info.get("weaknesses",[])[:2])}</ul>
+        </div>'''
+    s2 = f'<div class="slide"><div class="sh">Executive Summary</div><div class="tc2">{ec}</div></div>'
+
+    # Slide 3 — Pricing
+    pc = ""
+    for d in domains:
+        info = intel["domains"][d]; c = colors[d]
+        th = ""
+        for tier in info.get("pricing_tiers", [])[:5]:
+            hl = _li((tier.get("highlights") or [])[:3])
+            th += f'<div class="tier" style="border-left:3px solid {c}55;"><div class="tnm" style="color:{c};">{tier.get("name","")}</div><div class="tpr">{tier.get("price","")}</div><ul class="ti">{hl}</ul></div>'
+        pc += f'<div><div class="cn" style="color:{c};">{info["display_name"]}</div>{th}</div>'
+    s3 = f'<div class="slide"><div class="sh">Pricing Comparison</div><div class="tc2">{pc}</div></div>'
+
+    # Slide 4 — Differentiators
+    dc = ""
+    for d in domains:
+        info = intel["domains"][d]; c = colors[d]
+        key  = "only_in_" + d.replace(".", "_")
+        dc += f'''<div>
+          <div class="cn" style="color:{c};">Only in {info["display_name"]}</div>
+          <ul class="il">{_li(comparison.get(key,[])[:7])}</ul>
+          <div class="lbl" style="color:#e05555;margin-top:12px;">GAPS</div>
+          <ul class="il">{_li(info.get("weaknesses",[])[:3])}</ul>
+        </div>'''
+    s4 = f'<div class="slide"><div class="sh">Competitive Differentiators</div><div class="tc2">{dc}</div></div>'
+
+    # Slide 5 — GTM
+    km = _li(gtm.get("key_messages", []))
+    ob = _li(gtm.get("objections", []))
+    s5 = f'''<div class="slide"><div class="sh">GTM Strategy &amp; Recommendation</div>
+      <div class="tc2">
+        <div class="vbox" style="border-left:4px solid {c0};"><div class="lbl">PRICING VERDICT</div><div class="vt">{comparison.get("pricing_verdict","")}</div></div>
+        <div class="vbox" style="border-left:4px solid {c1};"><div class="lbl">POSITIONING VERDICT</div><div class="vt">{comparison.get("positioning_verdict","")}</div></div>
+      </div>
+      <div class="tc2" style="margin-top:14px;">
+        <div><div class="lbl">KEY MESSAGES</div><ul class="il">{km}</ul></div>
+        <div><div class="lbl">OBJECTION HANDLING</div><ul class="il">{ob}</ul></div>
+      </div>
+      <div class="rec" style="border-top:3px solid {c0};margin-top:16px;">
+        <div class="lbl" style="color:{c0};">RECOMMENDATION</div>
+        <div class="rt">{comparison.get("recommendation","")}</div>
+      </div>
+    </div>'''
+
+    # Slide 6 — Action Items
+    action_items = [item for item in gtm.get("action_items", []) if item]
+    ah = "".join(
+        f'<div class="ai"><div class="an" style="background:{c0};">{i+1}</div><div class="at">{item}</div></div>'
+        for i, item in enumerate(action_items)
+    )
+    s6 = f'<div class="slide"><div class="sh">Action Items</div><div class="ag">{ah}</div></div>'
+
+    slides = [("Title", s1), ("Executive Summary", s2), ("Pricing Comparison", s3),
+              ("Competitive Differentiators", s4), ("GTM Strategy", s5), ("Action Items", s6)]
+    body = "\n".join(
+        f'<div class="sw"><div class="sn">Slide {i+1} — {nm}</div>{html}</div>'
+        for i, (nm, html) in enumerate(slides)
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<base target="_blank">
+<title>Deck Preview — {n0} vs {n1}</title>
+<style>
+  *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+  body{{background:#050912;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;color:#c8d8e8;padding:24px 0 40px}}
+  .page{{max-width:1100px;margin:0 auto;padding:0 20px}}
+  .ph{{margin-bottom:24px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.08)}}
+  .ph-t{{font-size:10px;font-weight:700;letter-spacing:3px;color:rgba(255,255,255,0.3);text-transform:uppercase}}
+  .ph-s{{font-size:15px;font-weight:600;color:white;margin-top:4px}}
+  .sw{{margin-bottom:24px}}
+  .sn{{font-size:9px;font-weight:700;letter-spacing:2px;color:rgba(255,255,255,0.2);text-transform:uppercase;margin-bottom:5px}}
+  .slide{{background:#070d18;border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:26px 30px;overflow:hidden}}
+  .sh{{font-size:16px;font-weight:700;color:white;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.07)}}
+  .tc2{{display:grid;grid-template-columns:1fr 1fr;gap:22px}}
+  .lbl{{font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.32);margin:10px 0 4px}}
+  .il{{padding-left:14px;list-style:disc}}.il li{{margin-bottom:4px;line-height:1.5;color:#c8d8e8;font-size:12px}}
+  .s-title{{position:relative;min-height:200px;padding:0;display:flex}}
+  .half{{flex:1;padding:26px 22px;position:relative}}
+  .brand-bar{{position:absolute;top:0;left:0;right:0;height:3px}}
+  .hn{{font-size:22px;font-weight:700;margin-top:10px;margin-bottom:6px}}
+  .ht{{font-size:11.5px;color:rgba(255,255,255,0.45);line-height:1.5}}
+  .tc{{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none}}
+  .tl{{font-size:9px;font-weight:700;letter-spacing:3px;color:rgba(255,255,255,0.28);text-transform:uppercase;margin-bottom:5px}}
+  .tm{{font-size:24px;font-weight:800;color:white}}
+  .tv{{font-size:13px;color:rgba(255,255,255,0.45);margin-top:5px}}
+  .td{{font-size:10px;color:rgba(255,255,255,0.22);margin-top:6px}}
+  .ec{{padding-top:10px}}.cn{{font-size:15px;font-weight:700;margin-bottom:2px}}.cs{{font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:6px}}
+  .tier{{background:rgba(255,255,255,0.03);border-radius:6px;padding:9px 11px;margin-bottom:7px}}
+  .tnm{{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px}}
+  .tpr{{font-size:15px;font-weight:800;color:white;margin-bottom:4px}}
+  .ti{{padding-left:12px;font-size:11px;color:#8aa4bc}}.ti li{{margin-bottom:2px}}
+  .vbox{{background:rgba(255,255,255,0.03);border-radius:0 6px 6px 0;padding:11px 13px}}
+  .vt{{font-size:12.5px;color:#c8d8e8;line-height:1.6;margin-top:3px}}
+  .rec{{background:#0a1628;border-radius:6px;padding:13px 15px}}
+  .rt{{font-size:13px;color:#c8d8e8;line-height:1.7;margin-top:5px}}
+  .ag{{display:grid;grid-template-columns:1fr 1fr;gap:9px}}
+  .ai{{display:flex;align-items:flex-start;gap:9px;background:rgba(255,255,255,0.03);border-radius:6px;padding:9px 11px}}
+  .an{{width:22px;height:22px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#070d18;flex-shrink:0}}
+  .at{{font-size:12px;color:#c8d8e8;line-height:1.5}}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="ph"><div class="ph-t">RIVA COMPETITIVE INTELLIGENCE</div><div class="ph-s">Deck Preview — {n0} vs {n1} &middot; {date_str}</div></div>
+  {body}
+</div>
+</body>
+</html>"""
 
 
 def main():
