@@ -687,7 +687,7 @@ function DashboardContent() {
       if (saved.rivaComplete)   setRivaComplete(saved.rivaComplete);
       if (saved.compComplete)   setCompComplete(saved.compComplete);
       if (saved.pipelineLogs)   setPipelineLogs(saved.pipelineLogs);
-      if (saved.pipelineStatus) setPipelineStatus(saved.pipelineStatus);
+      // pipelineStatus is intentionally not restored — the pipeline always sets it fresh
       if (saved.reports?.length)  setReports(saved.reports);
       if (saved.chatMessages)   setChatMessages(saved.chatMessages);
       setRivaWsState('closed');
