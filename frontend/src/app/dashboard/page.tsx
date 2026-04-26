@@ -450,11 +450,11 @@ function DashboardContent() {
 
   const storageKey = `riva-session:${rivaUrl}|${compUrl}`;
 
-  // Check localStorage for a saved session matching these URLs
+  // Check sessionStorage for a saved session matching these URLs
   const savedSession = useMemo(() => {
     if (!rivaUrl && !compUrl) return null;
     try {
-      const raw = localStorage.getItem(storageKey);
+      const raw = sessionStorage.getItem(storageKey);
       return raw ? JSON.parse(raw) : null;
     } catch { return null; }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -500,11 +500,11 @@ function DashboardContent() {
   const [chatOpen,     setChatOpen]     = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>(savedSession?.chatMessages || []);
 
-  // Persist session state to localStorage on every meaningful change
+  // Persist session state to sessionStorage on every meaningful change
   useEffect(() => {
     if (!rivaUrl && !compUrl) return;
     try {
-      localStorage.setItem(storageKey, JSON.stringify({
+      sessionStorage.setItem(storageKey, JSON.stringify({
         sessionId, rivaComplete, compComplete,
         rivaFrame, compFrame,
         chatMessages, pipelineLogs, pipelineStatus,
@@ -689,7 +689,7 @@ function DashboardContent() {
           </div>
           {isRestoring && (
             <button
-              onClick={() => { try { localStorage.removeItem(storageKey); } catch {} window.location.reload(); }}
+              onClick={() => { try { sessionStorage.removeItem(storageKey); } catch {} window.location.reload(); }}
               className="px-2 py-1 rounded text-[8px] font-bold tracking-widest transition-all"
               style={{ background: 'rgba(255,51,51,0.1)', color: '#ff3333', border: '1px solid #ff333333' }}
             >

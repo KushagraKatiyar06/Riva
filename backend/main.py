@@ -10,6 +10,7 @@ import re
 import sys
 import uuid
 import sqlite3
+import base64
 import hashlib
 import time
 import requests
@@ -704,6 +705,7 @@ async def browse_websocket(
                         stealth_sync(page)
                     except ImportError:
                         pass
+
                     cdp = ctx.new_cdp_session(page)
 
                     def on_frame(params):
@@ -784,7 +786,7 @@ async def browse_websocket(
                                     )
                                     thought_q.put({"type": "auto_pause"})
                                     pause_event.clear()
-                                    challenge_cooldown = 8  # skip re-check for 8 steps
+                                    challenge_cooldown = 15  # give 15 steps before re-checking
                                     page.wait_for_timeout(500)
                                     continue
                             except Exception:
