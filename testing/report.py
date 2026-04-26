@@ -7,6 +7,7 @@ Usage:
     python testing/report.py
 """
 
+import io
 import os
 import re
 import json
@@ -79,7 +80,7 @@ def scrape_brand_assets(domain: str) -> dict:
     images_dir.mkdir(parents=True, exist_ok=True)
 
     base_url = f"https://{domain}"
-    assets   = {"logo": None, "og_image": None}
+    assets   = {"logo": None, "og_image": None, "brand_color": None}
 
     try:
         resp = requests.get(base_url, headers=BROWSER_HEADERS, timeout=10)
@@ -98,6 +99,9 @@ def scrape_brand_assets(domain: str) -> dict:
         if og_tag and og_tag.get("content"):
             og_url = urljoin(base_url, og_tag["content"])
             assets["og_image"] = _fetch_image_b64(og_url, images_dir, "og_image")
+
+        # --- Brand color extraction ---
+        assets["brand_color"] = _extract_brand_color(soup, assets.get("logo"))
 
     except Exception as e:
         print(f"  Image scrape warning for {domain}: {e}")
@@ -174,6 +178,48 @@ def _fetch_image_b64(url: str, save_dir: Path, name: str) -> str:
         return f"data:{content_type};base64,{b64}"
     except Exception:
         return None
+
+
+def _extract_brand_color(soup: BeautifulSoup, logo_b64: str = None) -> str | None:
+    """Extract primary brand color: theme-color meta → CSS vars → logo dominant color."""
+    # 1. theme-color / msapplication-TileColor meta tag
+    for name in ("theme-color", "msapplication-TileColor"):
+        tag = soup.find("meta", attrs={"name": name})
+        if tag and tag.get("content"):
+            c = tag["content"].strip()
+            if re.match(r"^#[0-9a-fA-F]{3,6}$", c):
+                return c
+
+    # 2. CSS custom properties (inline <style> tags)
+    for style_tag in soup.find_all("style"):
+        css = style_tag.string or ""
+        for var in ("--primary-color", "--brand-color", "--accent-color",
+                    "--color-primary", "--primary", "--theme-color", "--color-accent"):
+            m = re.search(re.escape(var) + r"\s*:\s*(#[0-9a-fA-F]{3,6})", css)
+            if m:
+                return m.group(1)
+
+    # 3. Dominant saturated color from logo via Pillow
+    if logo_b64 and "base64," in logo_b64:
+        try:
+            from PIL import Image
+            data = base64.b64decode(logo_b64.split("base64,")[1])
+            img  = Image.open(io.BytesIO(data)).convert("RGBA")
+            bg   = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[3])
+            small = bg.resize((40, 40), Image.LANCZOS)
+            quantized = small.quantize(colors=8)
+            pal = quantized.getpalette()
+            for i in range(8):
+                r, g, b = pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2]
+                lum = 0.299 * r + 0.587 * g + 0.114 * b
+                sat = max(r, g, b) - min(r, g, b)
+                if 25 < lum < 225 and sat > 40:
+                    return f"#{r:02x}{g:02x}{b:02x}"
+        except Exception:
+            pass
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -281,56 +327,81 @@ def render_html(intel: dict, images: dict) -> str:
     comparison = intel["comparison"]
     date_str   = datetime.now().strftime("%B %d, %Y")
     is_dual    = len(domains) == 2
-    grid_cols  = "1fr 1fr" if is_dual else "1fr"
 
-    def domain_card(d: str) -> str:
+    # Per-domain brand colors (fallback to defaults)
+    _fallbacks = ["#00aaaa", "#f3810f"]
+    domain_colors = {}
+    for i, d in enumerate(domains):
+        c = (images.get(d) or {}).get("brand_color") or _fallbacks[i % len(_fallbacks)]
+        domain_colors[d] = c
+
+    def _css_vars():
+        lines = []
+        for i, d in enumerate(domains):
+            slug = d.replace(".", "-")
+            lines.append(f"  --c{i+1}: {domain_colors[d]};")
+        return "\n".join(lines)
+
+    def domain_card(d: str, idx: int) -> str:
         info   = intel["domains"][d]
         imgs   = images.get(d, {})
         logo   = imgs.get("logo")
         og_img = imgs.get("og_image")
+        color  = domain_colors[d]
 
         logo_html = f'<img src="{logo}" class="logo-img" alt="{d} logo">' if logo else ""
         hero_html = (
             f'<img src="{og_img}" class="hero-img" alt="{d} hero">'
             if og_img else
-            '<div class="hero-placeholder">' + info["display_name"] + '</div>'
+            f'<div class="hero-placeholder" style="background:linear-gradient(135deg,{color}22,{color}44);color:{color};">{info["display_name"]}</div>'
         )
 
         tiers_html = ""
-        for tier in info.get("pricing_tiers", []):
-            highlights = "".join("<li>" + h + "</li>" for h in tier.get("highlights", []))
+        for tier in info.get("pricing_tiers", [])[:5]:
+            highlights = "".join(
+                f"<li>{h[:80]}</li>" for h in (tier.get("highlights") or [])[:3]
+            )
+            tier_name  = str(tier.get("name", ""))[:30]
+            tier_price = str(tier.get("price", ""))[:25]
             tiers_html += (
-                '<div class="tier-card">'
-                '<div class="tier-name">' + tier["name"] + "</div>"
-                '<div class="tier-price">' + tier["price"] + "</div>"
-                '<ul class="tier-features">' + highlights + "</ul>"
-                "</div>"
+                f'<div class="tier-card" style="border-top:2px solid {color}30;">'
+                f'<div class="tier-name" style="color:{color};">{tier_name}</div>'
+                f'<div class="tier-price">{tier_price}</div>'
+                f'<ul class="tier-features">{highlights}</ul>'
+                f'</div>'
             )
 
-        features_html  = "".join("<li>" + f + "</li>" for f in info.get("top_features", []))
-        strengths_html = "".join("<li>" + s + "</li>" for s in info.get("strengths", []))
-        weakness_html  = "".join("<li>" + w + "</li>" for w in info.get("weaknesses", []))
+        features  = info.get("top_features", [])[:6]
+        strengths = info.get("strengths", [])[:3]
+        weakness  = info.get("weaknesses", [])[:3]
+
+        features_html  = "".join(f"<li>{str(f)[:100]}</li>" for f in features)
+        strengths_html = "".join(f"<li>{str(s)[:100]}</li>" for s in strengths)
+        weakness_html  = "".join(f"<li>{str(w)[:100]}</li>" for w in weakness)
 
         return (
-            '<div class="domain-col">'
-            '<div class="domain-header">'
+            f'<div class="domain-col">'
+            f'<div class="domain-accent-bar" style="background:{color};"></div>'
+            f'<div class="domain-inner">'
+            f'<div class="domain-header">'
             + logo_html +
-            '<div class="domain-meta">'
-            '<h2>' + info["display_name"] + "</h2>"
-            '<p class="tagline">' + info["tagline"] + "</p>"
-            '<span class="audience-badge">' + info["target_audience"] + "</span>"
-            "</div></div>"
+            f'<div class="domain-meta">'
+            f'<h2>{info["display_name"]}</h2>'
+            f'<p class="tagline">{str(info["tagline"])[:120]}</p>'
+            f'<span class="audience-badge" style="background:{color}18;color:{color};">{str(info["target_audience"])[:80]}</span>'
+            f'</div></div>'
             + hero_html +
-            '<div class="section-label">Pricing</div>'
-            '<div class="tiers-row">' + tiers_html + "</div>"
-            '<div class="section-label">Top Features</div>'
-            '<ul class="feature-list">' + features_html + "</ul>"
-            '<div class="two-col">'
-            '<div><div class="section-label green">Strengths</div>'
-            '<ul class="feature-list">' + strengths_html + "</ul></div>"
-            '<div><div class="section-label red">Weaknesses</div>'
-            '<ul class="feature-list">' + weakness_html + "</ul></div>"
-            "</div></div>"
+            f'<div class="section-label">Pricing</div>'
+            f'<div class="tiers-row">{tiers_html}</div>'
+            f'<div class="section-label">Top Features</div>'
+            f'<ul class="feature-list clamp-list">{features_html}</ul>'
+            f'<div class="two-col">'
+            f'<div><div class="section-label green">Strengths</div>'
+            f'<ul class="feature-list">{strengths_html}</ul></div>'
+            f'<div><div class="section-label red">Weaknesses</div>'
+            f'<ul class="feature-list">{weakness_html}</ul></div>'
+            f'</div>'
+            f'</div></div>'
         )
 
     unique_sections = ""
@@ -339,112 +410,129 @@ def render_html(intel: dict, images: dict) -> str:
         items = comparison.get(key, [])
         if items:
             name  = intel["domains"][d]["display_name"]
-            pills = "".join('<span class="pill">' + i + "</span>" for i in items)
+            color = domain_colors[d]
+            pills = "".join(
+                f'<span class="pill" style="background:{color}18;color:{color};">{str(i)[:60]}</span>'
+                for i in items[:8]
+            )
             unique_sections += (
-                '<div class="unique-col">'
-                '<div class="section-label">Only in ' + name + "</div>"
-                '<div class="pills">' + pills + "</div>"
-                "</div>"
+                f'<div class="unique-col">'
+                f'<div class="section-label">Only in {name}</div>'
+                f'<div class="pills">{pills}</div>'
+                f'</div>'
             )
 
+    grid_cols        = "1fr 1fr" if is_dual else "1fr"
     unique_grid_cols = "1fr 1fr" if is_dual else "1fr"
-    cards_html       = "".join(domain_card(d) for d in domains)
+    cards_html       = "".join(domain_card(d, i) for i, d in enumerate(domains))
     title_str        = " vs ".join(intel["domains"][d]["display_name"] for d in domains)
+    c1 = domain_colors[domains[0]] if domains else "#00aaaa"
+    c2 = domain_colors[domains[1]] if len(domains) > 1 else "#f3810f"
 
-    return """<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Riva Intel &mdash; """ + title_str + """</title>
+<title>Riva Intel — {title_str}</title>
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
+  :root {{ {_css_vars()} }}
+  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: #f4f6fa; color: #1a1f2e; font-size: 13px; line-height: 1.5;
-  }
-  .page { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
-  .report-header {
+    background: #f0f3f8; color: #1a1f2e; font-size: 13px; line-height: 1.5;
+  }}
+  .page {{ max-width: 1200px; margin: 0 auto; padding: 28px 20px; }}
+  .report-header {{
     display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 28px; padding-bottom: 16px; border-bottom: 2px solid #00cccc;
-  }
-  .report-title { font-size: 22px; font-weight: 700; letter-spacing: 1px; color: #0a0f1e; }
-  .report-title span { color: #00aaaa; }
-  .report-meta { font-size: 11px; color: #888; text-align: right; }
-  .domain-grid {
-    display: grid; grid-template-columns: """ + grid_cols + """;
-    gap: 20px; margin-bottom: 20px;
-  }
-  .domain-col {
-    background: white; border-radius: 12px; padding: 20px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
-  }
-  .domain-header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-  .logo-img { width: 40px; height: 40px; object-fit: contain; border-radius: 8px; }
-  .domain-meta h2 { font-size: 17px; font-weight: 700; }
-  .tagline { font-size: 11px; color: #666; margin-top: 2px; }
-  .audience-badge {
-    display: inline-block; background: #e8f7f7; color: #007a7a;
-    border-radius: 20px; padding: 2px 10px; font-size: 10px;
-    font-weight: 600; margin-top: 4px; letter-spacing: 0.3px;
-  }
-  .hero-img { width: 100%; height: 130px; object-fit: cover; border-radius: 8px; margin-bottom: 14px; }
-  .hero-placeholder {
-    width: 100%; height: 50px; background: linear-gradient(135deg, #e8f7f7, #d0eaea);
-    border-radius: 8px; display: flex; align-items: center; justify-content: center;
-    font-weight: 700; color: #007a7a; font-size: 16px; margin-bottom: 14px; letter-spacing: 2px;
-  }
-  .section-label {
+    margin-bottom: 24px; padding-bottom: 14px;
+    border-bottom: 2px solid transparent;
+    border-image: linear-gradient(to right, {c1}, {c2}) 1;
+  }}
+  .report-title {{ font-size: 20px; font-weight: 800; letter-spacing: 1px; color: #0a0f1e; }}
+  .report-title span {{ color: {c1}; }}
+  .report-meta {{ font-size: 11px; color: #999; text-align: right; }}
+  .domain-grid {{
+    display: grid; grid-template-columns: {grid_cols};
+    gap: 18px; margin-bottom: 18px;
+  }}
+  .domain-col {{
+    background: white; border-radius: 12px; overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }}
+  .domain-accent-bar {{ height: 4px; width: 100%; }}
+  .domain-inner {{ padding: 18px; }}
+  .domain-header {{ display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }}
+  .logo-img {{ width: 36px; height: 36px; object-fit: contain; border-radius: 6px; flex-shrink: 0; }}
+  .domain-meta h2 {{ font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  .tagline {{ font-size: 11px; color: #666; margin-top: 2px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }}
+  .audience-badge {{
+    display: inline-block; border-radius: 20px; padding: 2px 8px;
+    font-size: 10px; font-weight: 600; margin-top: 4px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+  }}
+  .hero-img {{ width: 100%; height: 110px; object-fit: cover; border-radius: 8px; margin-bottom: 12px; }}
+  .hero-placeholder {{
+    width: 100%; height: 44px; border-radius: 8px; display: flex; align-items: center;
+    justify-content: center; font-weight: 700; font-size: 14px; margin-bottom: 12px; letter-spacing: 2px;
+  }}
+  .section-label {{
     font-size: 9px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase;
-    color: #aaa; margin: 14px 0 8px;
-  }
-  .section-label.green { color: #00a86b; }
-  .section-label.red   { color: #e05555; }
-  .tiers-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  .tier-card {
-    flex: 1; min-width: 80px; background: #f8fafc;
-    border: 1px solid #e5eaf2; border-radius: 8px; padding: 10px;
-  }
-  .tier-name  { font-size: 10px; font-weight: 700; color: #007a7a; text-transform: uppercase; letter-spacing: 0.5px; }
-  .tier-price { font-size: 15px; font-weight: 800; margin: 4px 0; color: #1a1f2e; }
-  .tier-features { padding-left: 12px; font-size: 10px; color: #666; }
-  .tier-features li { margin-bottom: 2px; }
-  .feature-list { padding-left: 14px; }
-  .feature-list li { margin-bottom: 3px; font-size: 12px; color: #333; }
-  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .comparison-section {
-    background: white; border-radius: 12px; padding: 20px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.07); margin-bottom: 20px;
-  }
-  .comp-header {
+    color: #aaa; margin: 12px 0 6px;
+  }}
+  .section-label.green {{ color: #00a86b; }}
+  .section-label.red   {{ color: #e05555; }}
+  .tiers-row {{ display: flex; gap: 6px; flex-wrap: wrap; }}
+  .tier-card {{
+    flex: 1; min-width: 90px; max-width: 160px; background: #f8fafc;
+    border-radius: 8px; padding: 8px; border: 1px solid #e5eaf2;
+  }}
+  .tier-name  {{ font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }}
+  .tier-price {{ font-size: 14px; font-weight: 800; margin: 3px 0; color: #1a1f2e; }}
+  .tier-features {{ padding-left: 10px; font-size: 10px; color: #666; }}
+  .tier-features li {{ margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .feature-list {{ padding-left: 12px; }}
+  .feature-list li {{ margin-bottom: 3px; font-size: 11.5px; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .two-col {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }}
+  .comparison-section {{
+    background: white; border-radius: 12px; padding: 18px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 18px;
+  }}
+  .comp-header {{
     font-size: 13px; font-weight: 700; color: #1a1f2e;
-    margin-bottom: 14px; display: flex; align-items: center; gap: 8px;
-  }
-  .comp-header::before {
+    margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+  }}
+  .comp-header::before {{
     content: ''; display: inline-block; width: 3px; height: 16px;
-    background: #00cccc; border-radius: 2px;
-  }
-  .unique-grid { display: grid; grid-template-columns: """ + unique_grid_cols + """; gap: 20px; margin-bottom: 16px; }
-  .pills { display: flex; flex-wrap: wrap; gap: 6px; }
-  .pill {
-    background: #e8f7f7; color: #007a7a; border-radius: 20px;
-    padding: 3px 10px; font-size: 11px; font-weight: 500;
-  }
-  .verdict-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
-  .verdict-box {
-    background: #f8fafc; border-left: 3px solid #00cccc;
-    border-radius: 0 8px 8px 0; padding: 10px 14px;
-  }
-  .verdict-label { font-size: 9px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: #aaa; margin-bottom: 4px; }
-  .verdict-text  { font-size: 12px; color: #333; }
-  .recommendation {
+    background: linear-gradient(to bottom, {c1}, {c2}); border-radius: 2px;
+  }}
+  .unique-grid {{ display: grid; grid-template-columns: {unique_grid_cols}; gap: 18px; margin-bottom: 14px; }}
+  .pills {{ display: flex; flex-wrap: wrap; gap: 5px; }}
+  .pill {{
+    border-radius: 20px; padding: 3px 9px; font-size: 11px; font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px;
+  }}
+  .verdict-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }}
+  .verdict-box {{
+    background: #f8fafc; border-left: 3px solid #ddd;
+    border-radius: 0 8px 8px 0; padding: 10px 12px;
+  }}
+  .verdict-label {{ font-size: 9px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: #aaa; margin-bottom: 4px; }}
+  .verdict-text  {{ font-size: 12px; color: #333; line-height: 1.6; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }}
+  .recommendation {{
     background: linear-gradient(135deg, #0a1628, #0d2040);
-    color: white; border-radius: 12px; padding: 20px 24px; margin-top: 4px;
-  }
-  .rec-label { font-size: 9px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase; color: #00cccc; margin-bottom: 8px; }
-  .rec-text  { font-size: 13px; line-height: 1.7; color: #cde; }
-  .report-footer { margin-top: 20px; text-align: center; font-size: 10px; color: #bbb; letter-spacing: 1px; }
-  @media print { body { background: white; } .page { padding: 16px; } }
+    color: white; border-radius: 12px; padding: 18px 22px; margin-top: 4px;
+    border-top: 3px solid transparent;
+    border-image: linear-gradient(to right, {c1}, {c2}) 1;
+  }}
+  .rec-label {{ font-size: 9px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase; color: {c1}; margin-bottom: 8px; }}
+  .rec-text  {{ font-size: 13px; line-height: 1.7; color: #cde; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }}
+  .report-footer {{ margin-top: 18px; text-align: center; font-size: 10px; color: #bbb; letter-spacing: 1px; }}
+  @media print {{
+    body {{ background: white; }}
+    .page {{ padding: 12px; max-width: 100%; }}
+    .domain-col, .comparison-section {{ box-shadow: none; border: 1px solid #e5eaf2; }}
+  }}
 </style>
 </head>
 <body>
@@ -452,30 +540,30 @@ def render_html(intel: dict, images: dict) -> str:
   <div class="report-header">
     <div>
       <div class="report-title">RIVA <span>INTELLIGENCE</span></div>
-      <div style="font-size:12px;color:#666;margin-top:2px;">Competitive Analysis &mdash; """ + title_str + """</div>
+      <div style="font-size:11px;color:#666;margin-top:2px;">Competitive Analysis &mdash; {title_str}</div>
     </div>
-    <div class="report-meta">Generated by Riva<br>""" + date_str + """</div>
+    <div class="report-meta">Generated by Riva<br>{date_str}</div>
   </div>
-  <div class="domain-grid">""" + cards_html + """</div>
+  <div class="domain-grid">{cards_html}</div>
   <div class="comparison-section">
     <div class="comp-header">Competitive Differentiators</div>
-    <div class="unique-grid">""" + unique_sections + """</div>
+    <div class="unique-grid">{unique_sections}</div>
     <div class="verdict-row">
-      <div class="verdict-box">
+      <div class="verdict-box" style="border-left-color:{c1};">
         <div class="verdict-label">Pricing Verdict</div>
-        <div class="verdict-text">""" + comparison.get("pricing_verdict", "&mdash;") + """</div>
+        <div class="verdict-text">{comparison.get("pricing_verdict", "&mdash;")}</div>
       </div>
-      <div class="verdict-box">
+      <div class="verdict-box" style="border-left-color:{c2};">
         <div class="verdict-label">Positioning Verdict</div>
-        <div class="verdict-text">""" + comparison.get("positioning_verdict", "&mdash;") + """</div>
+        <div class="verdict-text">{comparison.get("positioning_verdict", "&mdash;")}</div>
       </div>
     </div>
   </div>
   <div class="recommendation">
     <div class="rec-label">GTM Recommendation</div>
-    <div class="rec-text">""" + comparison.get("recommendation", "&mdash;") + """</div>
+    <div class="rec-text">{comparison.get("recommendation", "&mdash;")}</div>
   </div>
-  <div class="report-footer">RIVA COMPETITIVE INTELLIGENCE &middot; """ + date_str + """ &middot; CONFIDENTIAL</div>
+  <div class="report-footer">RIVA COMPETITIVE INTELLIGENCE &middot; {date_str} &middot; CONFIDENTIAL</div>
 </div>
 </body>
 </html>"""
@@ -531,8 +619,9 @@ def main():
     print("  Scraping brand assets...", end=" ", flush=True)
     images = {d: scrape_brand_assets(d) for d in selected}
     for d, imgs in images.items():
-        found = [k for k, v in imgs.items() if v]
-        print(f"\n    {d}: {found if found else 'no images found'}", end="")
+        color = imgs.get("brand_color") or "no color found"
+        found = [k for k, v in imgs.items() if v and k != "brand_color"]
+        print(f"\n    {d}: color={color}, images={found if found else 'none'}", end="")
     print()
 
     print("  Querying Vectorize + generating intel...", end=" ", flush=True)
