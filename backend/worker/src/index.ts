@@ -53,7 +53,6 @@ export class RivaBrainDO extends DurableObject<Env> {
     if (msg.url) {
       const url = msg.url.startsWith('http') ? msg.url : `https://${msg.url}`;
       
-      // Replay History
       try {
         const history = this.ctx.storage.sql.exec(`SELECT text, state, ts FROM thoughts ORDER BY id ASC`).toArray();
         for (const row of history) {

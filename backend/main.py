@@ -38,12 +38,10 @@ CF_HEADERS = {
 }
 
 EXTRACTS_DIR = Path(__file__).parent.parent / "testing" / "extracts"
-REPORTS_DIR  = Path(__file__).parent.parent / "testing" / "reports"
+REPORTS_DIR = Path(__file__).parent.parent / "testing" / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# ---------------------------------------------------------------------------
 # Import report generation modules from testing/
-# ---------------------------------------------------------------------------
 _TESTING_DIR = str(Path(__file__).parent.parent / "testing")
 if _TESTING_DIR not in sys.path:
     sys.path.insert(0, _TESTING_DIR)
@@ -60,12 +58,11 @@ except ImportError as _import_err:
     _REPORTS_AVAILABLE = False
     print(f"Warning: report modules not available: {_import_err}")
 
-# ---------------------------------------------------------------------------
 # Vectorize helpers (inlined from testing/vectorize.py)
-# ---------------------------------------------------------------------------
 _CHUNK_SIZE    = 400
 _CHUNK_OVERLAP = 60
 _EMBED_BATCH   = 50
+
 
 
 def _chunk_text(text: str) -> list[str]:
@@ -211,9 +208,7 @@ def _process_file_pipeline(filepath: Path, log_fn=None, cache: set = None) -> in
     return total
 
 
-# ---------------------------------------------------------------------------
 # RAG helpers (inlined from testing/query.py)
-# ---------------------------------------------------------------------------
 def _embed_query(text: str) -> list[float]:
     url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_EMBED_MODEL}"
     for attempt in range(4):
@@ -272,9 +267,7 @@ def _rag_answer(question: str, context: str) -> str:
     ).text.strip()
 
 
-# ---------------------------------------------------------------------------
 # Session registry — coordinates browse agents with the pipeline WS
-# ---------------------------------------------------------------------------
 class _Session:
     def __init__(self, expected: int):
         self.expected   = expected
@@ -297,9 +290,7 @@ class _Session:
 _sessions: dict[str, _Session] = {}
 
 
-# ---------------------------------------------------------------------------
 # Chrome CDP helpers
-# ---------------------------------------------------------------------------
 def _launch_bare_chrome(target_url: str, debug_port: int, user_data_dir: str):
     """Launch Chrome without Playwright automation flags (bypasses Turnstile detection)."""
     chrome_exe = shutil.which("chrome") or shutil.which("google-chrome")
@@ -336,9 +327,7 @@ def _wait_for_debug_port(port: int, timeout: int = 15) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
 # Extract saver
-# ---------------------------------------------------------------------------
 def save_extract(domain: str, intel_type: str, url: str, content: str) -> str:
     """Write extracted page content to testing/extracts/{domain}/{type}_{ts}.txt."""
     folder = EXTRACTS_DIR / domain
@@ -355,9 +344,7 @@ def save_extract(domain: str, intel_type: str, url: str, content: str) -> str:
     return str(filepath)
 
 
-# ---------------------------------------------------------------------------
 # Database
-# ---------------------------------------------------------------------------
 DB_PATH  = os.path.join(os.path.dirname(__file__), "riva_intel.db")
 _db_lock = threading.Lock()
 
@@ -394,9 +381,7 @@ def init_db():
 
 init_db()
 
-# ---------------------------------------------------------------------------
 # App
-# ---------------------------------------------------------------------------
 app = FastAPI(title="Riva Strategic Pathfinder")
 app.add_middleware(
     CORSMiddleware,
@@ -405,9 +390,7 @@ app.add_middleware(
 )
 
 
-# ---------------------------------------------------------------------------
 # REST
-# ---------------------------------------------------------------------------
 @app.get("/sessions")
 def list_sessions():
     with _db_lock, _db() as conn:
@@ -442,9 +425,7 @@ def serve_report(filename: str):
     return FileResponse(str(path))
 
 
-# ---------------------------------------------------------------------------
 # Browse WebSocket
-# ---------------------------------------------------------------------------
 @app.websocket("/ws/browse")
 async def browse_websocket(
     websocket: WebSocket,
@@ -476,9 +457,6 @@ async def browse_websocket(
                 (db_session_id, target_url, datetime.utcnow().isoformat()),
             )
 
-        # -------------------------------------------------------------------
-        # Browser thread
-        # -------------------------------------------------------------------
         def run_browser():
             from playwright.sync_api import sync_playwright
 
@@ -708,10 +686,7 @@ async def browse_websocket(
                     except Exception as e:
                         print(f"Gesture error: {e}")
 
-            # --- main browser logic ------------------------------------------
-            # Normalize to root domain (strip www.) so all extracts for
-            # cloudflare.com go into one folder regardless of which subdomain
-            # the crawler visits (www.cloudflare.com, developers.cloudflare.com, etc.)
+            # Normalize to root domain (strip www.)
             finishing_domain = re.sub(
                 r'^www\.', '', urlparse(target_url).hostname or "unknown"
             )
@@ -1078,8 +1053,6 @@ async def browse_websocket(
 
                             page.wait_for_timeout(500)
 
-                        # ---- end of step loop ----
-
                         # Close this attempt's browser before retrying (or on success)
                         try:
                             ctx.close()
@@ -1187,9 +1160,7 @@ async def browse_websocket(
         stop_event.set()
 
 
-# ---------------------------------------------------------------------------
 # HTML → PDF converter (uses Playwright headless Chromium)
-# ---------------------------------------------------------------------------
 def _html_to_pdf(html_path: Path, log_fn=None) -> Path:
     from playwright.sync_api import sync_playwright
     pdf_path = html_path.with_suffix(".pdf")
@@ -1216,9 +1187,7 @@ def _html_to_pdf(html_path: Path, log_fn=None) -> Path:
     return pdf_path
 
 
-# ---------------------------------------------------------------------------
 # Pipeline WebSocket — vectorize → chat → report generation
-# ---------------------------------------------------------------------------
 @app.websocket("/ws/pipeline")
 async def pipeline_websocket(
     websocket: WebSocket,
@@ -1242,10 +1211,6 @@ async def pipeline_websocket(
         def bot(text: str):
             out_q.put({"type": "chat", "role": "assistant", "text": text})
 
-        # ------------------------------------------------------------------
-        # 1. Vectorize each domain as soon as its agent finishes
-        #    expected=0 means restore mode — skip agent waiting entirely
-        # ------------------------------------------------------------------
         vectorized: set[str] = set()
 
         def _vectorize_domain(domain: str):
@@ -1325,9 +1290,6 @@ async def pipeline_websocket(
             out_q.put({"__done__": True})
             return
 
-        # ------------------------------------------------------------------
-        # 2. Initial chatbot prompt
-        # ------------------------------------------------------------------
         names_str = " and ".join(sorted(all_domains))
         if expected == 0:
             bot(
@@ -1346,10 +1308,6 @@ async def pipeline_websocket(
                 "• Or ask me any question about the competitive data"
             )
         out_q.put({"type": "status", "value": "ready"})
-
-        # ------------------------------------------------------------------
-        # 3. Chat loop
-        # ------------------------------------------------------------------
 
         def _gen_html(focus: str | None):
             focus_note = f" (focused on: **{focus}**)" if focus else ""

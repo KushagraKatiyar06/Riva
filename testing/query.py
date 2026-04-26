@@ -1,9 +1,6 @@
 """
 testing/query.py
 Query the Vectorize index for competitive intelligence using RAG.
-
-Usage:
-    python testing/query.py
 """
 
 import os
@@ -22,9 +19,6 @@ EMBED_MODEL = "@cf/baai/bge-base-en-v1.5"
 HEADERS = {"Authorization": f"Bearer {API_TOKEN}", "Content-Type": "application/json"}
 
 
-# ---------------------------------------------------------------------------
-# Embed a single query string
-# ---------------------------------------------------------------------------
 def embed_query(text: str) -> list[float]:
     url  = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{EMBED_MODEL}"
     resp = requests.post(url, headers=HEADERS, json={"text": [text]}, timeout=20)
@@ -32,9 +26,6 @@ def embed_query(text: str) -> list[float]:
     return resp.json()["result"]["data"][0]
 
 
-# ---------------------------------------------------------------------------
-# Search Vectorize
-# ---------------------------------------------------------------------------
 def search(vector: list[float], top_k: int = 15) -> list[dict]:
     url  = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/vectorize/v2/indexes/{INDEX_NAME}/query"
     resp = requests.post(
@@ -49,9 +40,6 @@ def search(vector: list[float], top_k: int = 15) -> list[dict]:
     return data["result"].get("matches", [])
 
 
-# ---------------------------------------------------------------------------
-# Format retrieved chunks as LLM context
-# ---------------------------------------------------------------------------
 def build_context(matches: list[dict]) -> str:
     grouped: dict[str, list[str]] = {}
     for m in matches:
@@ -68,9 +56,6 @@ def build_context(matches: list[dict]) -> str:
     return "\n".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# Gemini RAG answer
-# ---------------------------------------------------------------------------
 def answer(question: str, context: str) -> str:
     client = genai.Client(api_key=GEMINI_KEY)
     prompt = f"""You are a competitive intelligence analyst. Use ONLY the context below to answer the question.
@@ -85,9 +70,6 @@ Answer:"""
     return client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text.strip()
 
 
-# ---------------------------------------------------------------------------
-# Main REPL
-# ---------------------------------------------------------------------------
 def main():
     missing = [k for k in ("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN", "GEMINI_API_KEY") if not os.getenv(k)]
     if missing:
@@ -97,12 +79,7 @@ def main():
     print("\nRiva Intelligence Query")
     print("=" * 45)
     print("Ask anything about the sites you've analysed.")
-    print("Examples:")
-    print("  • How do the pricing tiers compare?")
-    print("  • What does the free plan include on each site?")
-    print("  • What are the API rate limits?")
-    print("  • What features does one have that the other doesn't?")
-    print("\nType 'quit' to exit.\n")
+    print("Type 'quit' to exit.\n")
 
     while True:
         try:

@@ -39,9 +39,6 @@ BROWSER_HEADERS = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Vectorize helpers
-# ---------------------------------------------------------------------------
 def embed(text: str) -> list:
     url = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{EMBED_MODEL}"
     for attempt in range(4):
@@ -72,9 +69,6 @@ def chunks_for(domain: str, topic: str, top_k: int = 12) -> str:
     return "\n\n".join(m["metadata"].get("text", "") for m in matches)
 
 
-# ---------------------------------------------------------------------------
-# Image scraping — logos only, targeted
-# ---------------------------------------------------------------------------
 def scrape_brand_assets(domain: str) -> dict:
     images_dir = EXTRACTS_DIR / domain / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
@@ -86,12 +80,12 @@ def scrape_brand_assets(domain: str) -> dict:
         resp = requests.get(base_url, headers=BROWSER_HEADERS, timeout=10)
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # --- Logo: try in priority order ---
+        # Logo: try in priority order
         logo_url = _find_logo_url(soup, base_url)
         if logo_url:
             assets["logo"] = _fetch_image_b64(logo_url, images_dir, "logo")
 
-        # --- OG image as hero background ---
+        # Use OG image as hero background
         og_tag = (
             soup.find("meta", property="og:image") or
             soup.find("meta", attrs={"name": "og:image"})
@@ -100,7 +94,7 @@ def scrape_brand_assets(domain: str) -> dict:
             og_url = urljoin(base_url, og_tag["content"])
             assets["og_image"] = _fetch_image_b64(og_url, images_dir, "og_image")
 
-        # --- Brand color extraction ---
+        # Brand color extraction
         assets["brand_color"] = _extract_brand_color(soup, assets.get("logo"))
 
     except Exception as e:
@@ -222,9 +216,6 @@ def _extract_brand_color(soup: BeautifulSoup, logo_b64: str = None) -> str | Non
     return None
 
 
-# ---------------------------------------------------------------------------
-# Intel generation via Gemini
-# ---------------------------------------------------------------------------
 def generate_intel(domains: list, focus: str = None) -> dict:
     client   = genai.Client(api_key=GEMINI_KEY)
     sections = {}
@@ -319,9 +310,6 @@ def generate_intel(domains: list, focus: str = None) -> dict:
     raise RuntimeError("generate_intel failed after 3 attempts")
 
 
-# ---------------------------------------------------------------------------
-# HTML one-pager renderer
-# ---------------------------------------------------------------------------
 def render_html(intel: dict, images: dict) -> str:
     domains    = list(intel["domains"].keys())
     comparison = intel["comparison"]
@@ -569,9 +557,6 @@ def render_html(intel: dict, images: dict) -> str:
 </html>"""
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 def get_available_domains() -> list:
     if not EXTRACTS_DIR.exists():
         return []
