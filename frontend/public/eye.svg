@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" width="200" height="120">
+  <defs>
+    <clipPath id="eye-clip">
+      <path d="M10,60 Q100,-15 190,60 Q100,135 10,60"/>
+    </clipPath>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00ffff" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#001a2e" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Eye white -->
+  <g clip-path="url(#eye-clip)">
+    <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" fill="#0a1a2e"/>
+    <!-- Pupil -->
+    <circle cx="100" cy="60" r="32" fill="#001018"/>
+    <!-- Glow -->
+    <circle cx="100" cy="60" r="32" fill="url(#glow)"/>
+    <!-- Iris -->
+    <circle cx="100" cy="60" r="14" fill="#00ffff" opacity="0.9"/>
+    <!-- Inner -->
+    <circle cx="100" cy="60" r="7" fill="#001a2e"/>
+    <!-- Highlight -->
+    <circle cx="110" cy="52" r="4" fill="#00ffff" opacity="0.6"/>
+  </g>
+  <!-- Eyelid arc -->
+  <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#00ffff" stroke-width="2.5" opacity="0.6"/>
+  <path d="M10,60 Q100,135 190,60" fill="none" stroke="#4db8ff" stroke-width="1.5" opacity="0.3"/>
+</svg>

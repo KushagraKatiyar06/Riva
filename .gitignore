@@ -52,3 +52,5 @@ logs/
 
 # Docs / notes that shouldn't be in the repo
 services.txt
+deployment.md
+explanation.txt
