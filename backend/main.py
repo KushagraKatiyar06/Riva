@@ -1429,14 +1429,16 @@ async def pipeline_websocket(
                     f"{len(gtm.get('action_items', []))} action items", "info")
 
                 log("Step 4/5 — Building slides...", "info")
+                from pptx_report import _make_theme
+                theme = _make_theme(images, all_domains)
                 prs_obj = new_prs()
                 for label, fn, args in [
-                    ("Title",                    slide_title,          (prs_obj, intel, images)),
-                    ("Executive Summary",         slide_exec_summary,   (prs_obj, intel, images)),
-                    ("Pricing Comparison",        slide_pricing,        (prs_obj, intel)),
-                    ("Competitive Differentiators", slide_differentiators, (prs_obj, intel)),
-                    ("GTM Strategy",              slide_gtm,            (prs_obj, intel, gtm)),
-                    ("Action Items",              slide_action_items,   (prs_obj, gtm)),
+                    ("Title",                    slide_title,          (prs_obj, intel, images, theme)),
+                    ("Executive Summary",         slide_exec_summary,   (prs_obj, intel, images, theme)),
+                    ("Pricing Comparison",        slide_pricing,        (prs_obj, intel, theme, images)),
+                    ("Competitive Differentiators", slide_differentiators, (prs_obj, intel, theme, images)),
+                    ("GTM Strategy",              slide_gtm,            (prs_obj, intel, gtm, theme, images)),
+                    ("Action Items",              slide_action_items,   (prs_obj, gtm, theme, all_domains)),
                 ]:
                     log(f"  Slide: {label}", "info")
                     fn(*args)
