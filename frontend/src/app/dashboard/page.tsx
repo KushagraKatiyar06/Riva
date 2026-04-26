@@ -448,35 +448,71 @@ function DashboardContent() {
   const rivaUrl      = searchParams.get('riva') || '';
   const compUrl      = searchParams.get('comp') || '';
 
-  // Stable session ID for this page load
-  const sessionId = useMemo(() => crypto.randomUUID(), []);
-  const expected  = (rivaUrl ? 1 : 0) + (compUrl ? 1 : 0);
+  const storageKey = `riva-session:${rivaUrl}|${compUrl}`;
 
-  // Browser state
+  // Check localStorage for a saved session matching these URLs
+  const savedSession = useMemo(() => {
+    if (!rivaUrl && !compUrl) return null;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const isRestoring = !!savedSession;
+
+  // Reuse saved sessionId if restoring so backend can correlate
+  const sessionId = useMemo(
+    () => savedSession?.sessionId || crypto.randomUUID(),
+    [] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // expected=0 in restore mode — backend skips agent waiting
+  const expected = isRestoring ? 0 : (rivaUrl ? 1 : 0) + (compUrl ? 1 : 0);
+
+  // Browser state — seed from saved session when restoring
   const [rivaThoughts, setRivaThoughts] = useState<Thought[]>([]);
   const [compThoughts, setCompThoughts] = useState<Thought[]>([]);
-  const [rivaFrame,    setRivaFrame]    = useState('');
-  const [compFrame,    setCompFrame]    = useState('');
+  const [rivaFrame,    setRivaFrame]    = useState(savedSession?.rivaFrame    || '');
+  const [compFrame,    setCompFrame]    = useState(savedSession?.compFrame    || '');
   const [rivaPaused,    setRivaPaused]    = useState(false);
   const [compPaused,    setCompPaused]    = useState(false);
-  const [rivaComplete,  setRivaComplete]  = useState(false);
-  const [compComplete,  setCompComplete]  = useState(false);
-  const [rivaWsState,   setRivaWsState]   = useState<'connecting' | 'open' | 'closed'>('connecting');
-  const [compWsState,   setCompWsState]   = useState<'connecting' | 'open' | 'closed'>('connecting');
+  const [rivaComplete,  setRivaComplete]  = useState(savedSession?.rivaComplete  || false);
+  const [compComplete,  setCompComplete]  = useState(savedSession?.compComplete  || false);
+  const [rivaWsState,   setRivaWsState]   = useState<'connecting' | 'open' | 'closed'>(
+    isRestoring ? 'closed' : 'connecting'
+  );
+  const [compWsState,   setCompWsState]   = useState<'connecting' | 'open' | 'closed'>(
+    isRestoring ? 'closed' : 'connecting'
+  );
 
   // Pipeline state
-  const [pipelineLogs,   setPipelineLogs]   = useState<PipelineLog[]>([]);
-  const [pipelineStatus, setPipelineStatus] = useState<'waiting' | 'vectorizing' | 'ready'>('waiting');
+  const [pipelineLogs,    setPipelineLogs]    = useState<PipelineLog[]>(savedSession?.pipelineLogs    || []);
+  const [pipelineStatus,  setPipelineStatus]  = useState<'waiting' | 'vectorizing' | 'ready'>(savedSession?.pipelineStatus  || 'waiting');
   const [pipelineWsState, setPipelineWsState] = useState<'connecting' | 'open' | 'closed'>('connecting');
 
   // Report state
-  const [reportUrl,       setReportUrl]       = useState<string | null>(null);
-  const [reportType,      setReportType]      = useState<'pdf' | 'pptx' | null>(null);
+  const [reportUrl,       setReportUrl]       = useState<string | null>(savedSession?.reportUrl  || null);
+  const [reportType,      setReportType]      = useState<'pdf' | 'pptx' | null>(savedSession?.reportType || null);
   const [reportModalOpen, setReportModalOpen] = useState(false);
 
   // Chat state
   const [chatOpen,     setChatOpen]     = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMsg[]>(savedSession?.chatMessages || []);
+
+  // Persist session state to localStorage on every meaningful change
+  useEffect(() => {
+    if (!rivaUrl && !compUrl) return;
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({
+        sessionId, rivaComplete, compComplete,
+        rivaFrame, compFrame,
+        chatMessages, pipelineLogs, pipelineStatus,
+        reportUrl, reportType,
+      }));
+    } catch {}
+  }, [sessionId, rivaComplete, compComplete, rivaFrame, compFrame,
+      chatMessages, pipelineLogs, pipelineStatus, reportUrl, reportType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rivaWsRef     = useRef<WebSocket | null>(null);
   const compWsRef     = useRef<WebSocket | null>(null);
@@ -509,9 +545,9 @@ function DashboardContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  // Riva browse WS
+  // Riva browse WS — skip if restoring a saved session
   useEffect(() => {
-    if (!rivaUrl) { setRivaWsState('closed'); return; }
+    if (isRestoring || !rivaUrl) { setRivaWsState('closed'); return; }
     const ws = new WebSocket(
       `ws://localhost:8000/ws/browse?session=${sessionId}&role=riva`
     );
@@ -534,9 +570,9 @@ function DashboardContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rivaUrl]);
 
-  // Competitor browse WS
+  // Competitor browse WS — skip if restoring a saved session
   useEffect(() => {
-    if (!compUrl) { setCompWsState('closed'); return; }
+    if (isRestoring || !compUrl) { setCompWsState('closed'); return; }
     const ws = new WebSocket(
       `ws://localhost:8000/ws/browse?session=${sessionId}&role=comp`
     );
@@ -627,6 +663,12 @@ function DashboardContent() {
           {rivaUrl && <span className="text-[#00ffff]/40 truncate max-w-[200px]">{rivaUrl}</span>}
           {rivaUrl && compUrl && <span className="text-white/20">vs</span>}
           {compUrl && <span className="text-[#ff3333]/40 truncate max-w-[200px]">{compUrl}</span>}
+          {isRestoring && (
+            <span className="px-2 py-0.5 rounded text-[8px] font-bold tracking-widest"
+              style={{ background: 'rgba(0,204,204,0.1)', color: '#00cccc', border: '1px solid #00cccc33' }}>
+              RESTORED
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-4 text-[10px] font-bold">
           {rivaUrl && (
@@ -645,6 +687,15 @@ function DashboardContent() {
             <div className={`w-2 h-2 rounded-full ${pipelineWsState === 'open' ? 'bg-cyan-500 shadow-[0_0_8px_#06b6d4]' : 'bg-white/10'}`} />
             <span className="text-white/30">PIPELINE</span>
           </div>
+          {isRestoring && (
+            <button
+              onClick={() => { try { localStorage.removeItem(storageKey); } catch {} window.location.reload(); }}
+              className="px-2 py-1 rounded text-[8px] font-bold tracking-widest transition-all"
+              style={{ background: 'rgba(255,51,51,0.1)', color: '#ff3333', border: '1px solid #ff333333' }}
+            >
+              NEW SESSION
+            </button>
+          )}
         </div>
       </header>
 

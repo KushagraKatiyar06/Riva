@@ -1080,75 +1080,79 @@ async def pipeline_websocket(
 
         # ------------------------------------------------------------------
         # 1. Vectorize each domain as soon as its agent finishes
+        #    expected=0 means restore mode — skip agent waiting entirely
         # ------------------------------------------------------------------
-        log("Pipeline active — will vectorize each domain as agents complete.", "info")
         vectorized: set[str] = set()
-        deadline = time.time() + 600  # 10-min overall cap
 
-        while time.time() < deadline and not stop_evt.is_set():
-            try:
-                domain = sess.ready_q.get(timeout=2)
-            except tqueue.Empty:
-                if sess.done_event.is_set():
-                    break
-                continue
-
-            if domain in vectorized:
-                continue
-
+        def _vectorize_domain(domain: str):
+            """Vectorize all extract files for a domain, updating vectorized set."""
             if not CF_ACCOUNT_ID or not CF_API_TOKEN:
                 log("Cloudflare credentials missing — skipping vectorization.", "error")
                 vectorized.add(domain)
-                continue
-
-            log(f"Agent finished for {domain} — starting vectorization.", "success")
+                return
             domain_dir = EXTRACTS_DIR / domain
-            if domain_dir.exists():
-                files = sorted(domain_dir.rglob("*.txt"))
-                file_count = len(files)
-                cache: set = _load_vec_cache(domain_dir)
-                skipped  = 0
-                errored  = 0
-                file_count = len(files)
-                log(f"  {file_count} extract file(s) found for {domain}", "info")
-                total = 0
-                for idx, fp in enumerate(files, 1):
-                    if stop_evt.is_set():
-                        log(f"  Stopped early at {idx}/{file_count} (pipeline closed).", "error")
-                        break
-                    log(f"  [{domain} {idx}/{file_count}] {fp.name}", "info")
-                    try:
-                        n = _process_file_pipeline(fp, log_fn=log, cache=cache)
-                        if n == -1:
-                            skipped += 1
-                        else:
-                            total += n
-                    except Exception as fp_err:
-                        errored += 1
-                        log(f"  FAILED [{idx}/{file_count}] {fp.name}: {fp_err}", "error")
-                        # Daily neuron limit — no point continuing
-                        if "daily neuron limit" in str(fp_err).lower() or "4 retries" in str(fp_err):
-                            log(f"  Daily Workers AI limit reached — stopping vectorization. Try again after midnight UTC.", "error")
-                            break
-
-                _save_vec_cache(domain_dir, cache)
-                summary_parts = [f"{total} new vectors"]
-                if skipped:
-                    summary_parts.append(f"{skipped} unchanged (skipped)")
-                if errored:
-                    summary_parts.append(f"{errored} FAILED")
-                state = "error" if errored else "success"
-                log(f"  {domain} complete — {', '.join(summary_parts)}.", state)
-            else:
+            if not domain_dir.exists():
                 log(f"  No extracts directory found for {domain}.", "error")
+                vectorized.add(domain)
+                return
+            files = sorted(domain_dir.rglob("*.txt"))
+            file_count = len(files)
+            cache   = _load_vec_cache(domain_dir)
+            skipped = 0
+            errored = 0
+            total   = 0
+            log(f"  {file_count} extract file(s) found for {domain}", "info")
+            for idx, fp in enumerate(files, 1):
+                if stop_evt.is_set():
+                    log(f"  Stopped early at {idx}/{file_count}.", "error")
+                    break
+                log(f"  [{domain} {idx}/{file_count}] {fp.name}", "info")
+                try:
+                    n = _process_file_pipeline(fp, log_fn=log, cache=cache)
+                    if n == -1:
+                        skipped += 1
+                    else:
+                        total += n
+                except Exception as fp_err:
+                    errored += 1
+                    log(f"  FAILED [{idx}/{file_count}] {fp.name}: {fp_err}", "error")
+                    if "daily neuron limit" in str(fp_err).lower() or "4 retries" in str(fp_err):
+                        log("  Daily Workers AI limit reached — stopping. Try again after midnight UTC.", "error")
+                        break
+            _save_vec_cache(domain_dir, cache)
+            parts = [f"{total} new vectors"]
+            if skipped:
+                parts.append(f"{skipped} unchanged (skipped)")
+            if errored:
+                parts.append(f"{errored} FAILED")
+            log(f"  {domain} complete — {', '.join(parts)}.", "error" if errored else "success")
             vectorized.add(domain)
 
-        # Fallback: any domains in extracts not yet processed
-        if not vectorized and EXTRACTS_DIR.exists():
-            for d in (p.name for p in EXTRACTS_DIR.iterdir() if p.is_dir()):
-                if d not in vectorized:
-                    sess.domains.append(d)
-                    vectorized.add(d)
+        if expected == 0:
+            # Restore mode — data already in Vectorize, just discover existing domains
+            log("Restoring session — checking existing extract data...", "info")
+            if EXTRACTS_DIR.exists():
+                for d_path in sorted(EXTRACTS_DIR.iterdir()):
+                    if d_path.is_dir() and not d_path.name.startswith("."):
+                        vectorized.add(d_path.name)
+            if vectorized:
+                log(f"  Found existing data for: {', '.join(sorted(vectorized))}", "success")
+            else:
+                log("  No existing extract data found.", "error")
+        else:
+            log("Pipeline active — will vectorize each domain as agents complete.", "info")
+            deadline = time.time() + 600  # 10-min overall cap
+            while time.time() < deadline and not stop_evt.is_set():
+                try:
+                    domain = sess.ready_q.get(timeout=2)
+                except tqueue.Empty:
+                    if sess.done_event.is_set():
+                        break
+                    continue
+                if domain in vectorized:
+                    continue
+                log(f"Agent finished for {domain} — starting vectorization.", "success")
+                _vectorize_domain(domain)
 
         all_domains = list(vectorized) or list(sess.domains)
         if not all_domains:
@@ -1161,13 +1165,22 @@ async def pipeline_websocket(
         # 2. Initial chatbot prompt
         # ------------------------------------------------------------------
         names_str = " and ".join(sorted(all_domains))
-        bot(
-            f"All data for **{names_str}** has been vectorized!\n\n"
-            "What would you like to do?\n"
-            "• Type **html** for a one-pager HTML report\n"
-            "• Type **pptx** for a PowerPoint deck\n"
-            "• Or ask me any question about the competitive data"
-        )
+        if expected == 0:
+            bot(
+                f"Session restored for **{names_str}**.\n\n"
+                "What would you like to do?\n"
+                "• Type **html** for a one-pager HTML report\n"
+                "• Type **pptx** for a PowerPoint deck\n"
+                "• Or ask me any question about the competitive data"
+            )
+        else:
+            bot(
+                f"All data for **{names_str}** has been vectorized!\n\n"
+                "What would you like to do?\n"
+                "• Type **html** for a one-pager HTML report\n"
+                "• Type **pptx** for a PowerPoint deck\n"
+                "• Or ask me any question about the competitive data"
+            )
         out_q.put({"type": "status", "value": "ready"})
 
         # ------------------------------------------------------------------
@@ -1311,12 +1324,12 @@ async def pipeline_websocket(
                     _gen_pptx(focus)
                 continue
 
-            # Extract inline focus — e.g. "html focused on pricing" → "pricing"
+            # Extract inline focus from any text after the report keyword.
+            # Priority: "focus on X" / "about X" patterns first, then any remaining text.
             focus = None
             focus_match = re.search(r'\bfocus(?:ed)?\s+(?:on\s+)?(.+)', text_lower)
             if focus_match:
                 focus = focus_match.group(1).strip().rstrip(".,!?")
-            # Also detect "html about X" / "pptx about X"
             if not focus:
                 about_match = re.search(
                     r'\b(?:html|pptx?|report|deck|slides?)\b.{0,20}\babout\s+(.+)',
@@ -1324,6 +1337,14 @@ async def pipeline_websocket(
                 )
                 if about_match:
                     focus = about_match.group(1).strip().rstrip(".,!?")
+            # Fallback: strip the report keyword(s) — any meaningful remaining text is the focus
+            if not focus:
+                remaining = re.sub(
+                    r'\*{0,2}\b(html|pptx?|powerpoint|report|deck|slides?|one.?pager|presentation)\b\*{0,2}',
+                    '', user_text, flags=re.IGNORECASE,
+                ).strip().strip('.,!?').strip()
+                if len(remaining.split()) >= 2:
+                    focus = remaining
 
             is_html = any(w in text_lower for w in
                           ["html", "report", "one-pager", "one pager", "pager"])
