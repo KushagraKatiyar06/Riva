@@ -1380,7 +1380,7 @@ async def pipeline_websocket(
 
                 log("Step 4/5 — Saving HTML to disk...", "info")
                 slug = "_vs_".join(
-                    intel["domains"][d]["display_name"].lower().replace(" ", "-")
+                    re.sub(r'[^a-z0-9-]', '', intel["domains"][d]["display_name"].lower().replace(" ", "-"))
                     for d in all_domains
                 )
                 ts        = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -1447,7 +1447,7 @@ async def pipeline_websocket(
 
                 log("Step 5/5 — Saving deck and preview to disk...", "info")
                 names    = "_vs_".join(
-                    intel["domains"][d]["display_name"].lower().replace(" ", "-")
+                    re.sub(r'[^a-z0-9-]', '', intel["domains"][d]["display_name"].lower().replace(" ", "-"))
                     for d in all_domains
                 )
                 ts       = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
