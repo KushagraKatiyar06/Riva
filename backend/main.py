@@ -984,52 +984,80 @@ async def browse_websocket(
                                         el, matched = find_element(page, fallback)
 
                                     if el:
-                                        frustration = 0
                                         thought(f"Targeting: {matched}", "clicking")
-                                        el.evaluate(
-                                            "el => { el.scrollIntoView({behavior:'smooth',block:'center'});"
-                                            " el.style.outline='4px solid cyan'; }"
-                                        )
-                                        page.wait_for_timeout(800)
-                                        el.hover(force=True)
-                                        if goal == "CLICK":
-                                            url_before = page.url
+                                        try:
                                             el.evaluate(
-                                                "el => el.setAttribute('target', '_self')"
+                                                "el => { el.scrollIntoView({behavior:'smooth',block:'center'});"
+                                                " el.style.outline='4px solid cyan'; }"
                                             )
-                                            try:
-                                                el.click(force=True, timeout=3000)
-                                            except Exception:
-                                                el.evaluate("el => el.click()")
-                                            page.wait_for_timeout(2000)
-                                            if page.url == url_before:
+                                            page.wait_for_timeout(800)
+                                            el.hover(force=True)
+                                            if goal == "CLICK":
+                                                url_before = page.url
+                                                el.evaluate(
+                                                    "el => el.setAttribute('target', '_self')"
+                                                )
                                                 try:
-                                                    href = el.evaluate(
-                                                        "el => el.href || el.getAttribute('href') || ''"
-                                                    )
-                                                    if (
-                                                        href
-                                                        and href.startswith("http")
-                                                        and href != url_before
-                                                    ):
-                                                        thought(
-                                                            "Click didn't navigate — going via href",
-                                                            "navigating",
-                                                        )
-                                                        page.goto(
-                                                            href,
-                                                            wait_until="domcontentloaded",
-                                                            timeout=10000,
-                                                        )
-                                                    else:
-                                                        thought(
-                                                            "Click had no effect — scrolling",
-                                                            "info",
-                                                        )
-                                                        page.evaluate("window.scrollBy(0, 400)")
+                                                    el.click(force=True, timeout=3000)
                                                 except Exception:
-                                                    pass
-                                        page.wait_for_timeout(1000)
+                                                    el.evaluate("el => el.click()")
+                                                page.wait_for_timeout(2000)
+                                                if page.url == url_before:
+                                                    try:
+                                                        href = el.evaluate(
+                                                            "el => el.href || el.getAttribute('href') || ''"
+                                                        )
+                                                        if (
+                                                            href
+                                                            and href.startswith("http")
+                                                            and href != url_before
+                                                        ):
+                                                            thought(
+                                                                "Click didn't navigate — going via href",
+                                                                "navigating",
+                                                            )
+                                                            page.goto(
+                                                                href,
+                                                                wait_until="domcontentloaded",
+                                                                timeout=10000,
+                                                            )
+                                                        else:
+                                                            thought(
+                                                                "Click had no effect — scrolling",
+                                                                "info",
+                                                            )
+                                                            page.evaluate("window.scrollBy(0, 400)")
+                                                    except Exception:
+                                                        pass
+                                            page.wait_for_timeout(1000)
+                                            frustration = 0
+                                        except Exception as action_err:
+                                            frustration += 1
+                                            thought(
+                                                f"Action failed on '{matched}' ({frustration}/3): {action_err}",
+                                                "info",
+                                            )
+                                            if frustration >= 3:
+                                                milestone = (
+                                                    "docs" if objectives["pricing"] else "pricing"
+                                                )
+                                                thought(
+                                                    f"Couldn't interact with {milestone} element after 3 attempts — "
+                                                    "pausing. Paste the URL in the bar above and "
+                                                    "I'll take it from there.",
+                                                    "error",
+                                                )
+                                                thought_q.put({
+                                                    "type": "stuck_guidance",
+                                                    "milestone": milestone,
+                                                })
+                                                thought_q.put({"type": "auto_pause"})
+                                                pause_event.clear()
+                                                _stuck_pause[0] = True
+                                                frustration = 0
+                                            else:
+                                                page.evaluate("window.scrollBy(0, 600)")
+                                                page.wait_for_timeout(500)
                                     else:
                                         frustration += 1
                                         thought(

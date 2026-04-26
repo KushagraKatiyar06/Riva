@@ -307,10 +307,19 @@ function BrowserPanel({
         )}
         <div className="flex-1 flex gap-2">
           <input className="flex-1 rounded px-2 py-1 outline-none"
-            style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.1)',
+            style={{
+              background: 'rgba(0,0,0,0.4)',
+              border: stuckMilestone && !isComplete
+                ? '1px solid rgba(200,168,74,0.8)'
+                : '1px solid rgba(255,255,255,0.1)',
               color: 'rgba(255,255,255,0.9)',
-              fontSize: 9, fontFamily: "'Fira Code', monospace" }}
-            placeholder={wsActive ? 'navigate to url...' : 'open url in new browser...'}
+              fontSize: 9, fontFamily: "'Fira Code', monospace",
+              boxShadow: stuckMilestone && !isComplete
+                ? '0 0 8px rgba(200,168,74,0.25)' : 'none',
+            }}
+            placeholder={stuckMilestone && !isComplete
+              ? `paste the ${stuckMilestone} url here and press enter...`
+              : wsActive ? 'navigate to url...' : 'open url in new browser...'}
             value={manualUrl}
             onChange={e => setManualUrl(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submitGoto(); } }}
@@ -343,15 +352,17 @@ function BrowserPanel({
               boxShadow: 'inset 0 0 60px rgba(109,192,138,0.04)' }} />
         )}
         {stuckMilestone && !isComplete && (
-          <div className="absolute bottom-0 left-0 right-0 px-4 py-3 flex flex-col gap-1.5"
-            style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.92) 80%, transparent)' }}>
+          <div className="absolute bottom-0 left-0 right-0 px-4 py-4 flex flex-col gap-2"
+            style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.95) 80%, transparent)' }}>
             <div style={{ fontSize: 10, fontWeight: 600, color: '#c8a84a', letterSpacing: '1.5px',
               fontFamily: "'DM Sans', sans-serif" }}>
               ⚠ couldn&apos;t find {stuckMilestone}
             </div>
-            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', lineHeight: '19px',
-              fontFamily: "'Fira Code', monospace" }}>
-              paste the <span style={{ color: 'rgba(255,255,255,0.85)' }}>{stuckMilestone}</span> url above ↑
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)', lineHeight: '18px',
+              fontFamily: "'DM Sans', sans-serif" }}>
+              Navigate to the{' '}
+              <span style={{ color: '#c8a84a', fontWeight: 600 }}>{stuckMilestone}</span>{' '}
+              page yourself, copy the URL, and paste it into the highlighted bar above — the agent will take it from there.
             </div>
           </div>
         )}
@@ -700,7 +711,7 @@ function DashboardContent() {
   const [rivaCanSkip, setRivaCanSkip] = useState(false);
   const [compCanSkip, setCompCanSkip] = useState(false);
 
-  const [logsExpanded,   setLogsExpanded]   = useState(false);
+  const [logsExpanded,   setLogsExpanded]   = useState(true);
   const [bottomExpanded, setBottomExpanded] = useState(false);
 
   useEffect(() => {
