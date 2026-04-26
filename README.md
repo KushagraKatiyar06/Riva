@@ -1,6 +1,6 @@
 # Riva — Autonomous Competitive Intelligence
 
-Riva lets you paste two URLs — your product and a competitor — and dispatches autonomous browser agents to research both in parallel. It extracts pricing, features, and documentation, vectorizes everything into Cloudflare's knowledge base, and gives you an AI chat interface to interrogate the data. When you're ready, it generates a polished one-pager PDF or a full PowerPoint GTM deck.
+Riva lets you paste two URLs: your product and a competitor. Riva then dispatches autonomous browser agents to research both in parallel. It extracts pricing, features, and documentation, vectorizes everything into Cloudflare's knowledge base, and gives you an AI chat interface to interrogate the data. When you're ready, it generates a polished one-pager PDF or a full PowerPoint GTM deck.
 
 ---
 
@@ -89,47 +89,5 @@ npm run dev
 
 Open `http://localhost:3000`, paste two URLs, and hit Go.
 
----
 
-## Hosting on Railway
-
-Both services deploy from this repo. Set them up as two separate Railway services in the same project.
-
-### Backend service
-
-- Root directory: `.` (repo root)
-- Railway picks up `railway.toml` automatically and uses the Dockerfile
-- Add environment variables: `GEMINI_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`
-
-### Frontend service
-
-- Root directory: `frontend`
-- Railway auto-detects Next.js — no config needed
-- Add one environment variable: `NEXT_PUBLIC_API_URL=https://your-backend.railway.app`
-
-Every push to main auto-deploys both services.
-
----
-
-## Project structure
-
-```
-riva/
-  backend/
-    main.py          - FastAPI server: browse WS, pipeline WS, REST endpoints
-    Dockerfile       - Production container with Playwright/Chromium
-  frontend/
-    src/app/
-      page.tsx       - Landing page
-      dashboard/
-        page.tsx     - Main dashboard (browser panels, chat, reports)
-  testing/
-    report.py        - HTML one-pager generation
-    pptx_report.py   - PowerPoint deck generation
-    vectorize.py     - Standalone vectorization script
-    query.py         - Standalone RAG query script
-    extracts/        - Cached page extracts per domain (gitignored)
-    reports/         - Generated report files (gitignored)
-  run.py             - Local dev entry point
-  requirements.txt   - Python dependencies
-```
+# Created by Kushagra Katiyar
