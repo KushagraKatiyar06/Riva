@@ -18,3 +18,5 @@ yarn-error.log*
 
 testing/extracts/
 backend/riva_intel.db
+
+/backend/.browser_profiles/

@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 playwright
+playwright-stealth
 python-dotenv
 google-genai
 requests

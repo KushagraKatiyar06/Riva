@@ -8,7 +8,9 @@ Usage:
 """
 
 import os
+import re
 import json
+import time
 import base64
 import requests
 from pathlib import Path
@@ -40,10 +42,17 @@ BROWSER_HEADERS = {
 # Vectorize helpers
 # ---------------------------------------------------------------------------
 def embed(text: str) -> list:
-    url  = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{EMBED_MODEL}"
-    resp = requests.post(url, headers=CF_HEADERS, json={"text": [text]}, timeout=20)
-    resp.raise_for_status()
-    return resp.json()["result"]["data"][0]
+    url = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{EMBED_MODEL}"
+    for attempt in range(4):
+        resp = requests.post(url, headers=CF_HEADERS, json={"text": [text]}, timeout=20)
+        if resp.status_code == 429:
+            wait = 30 * (attempt + 1)
+            print(f"  Workers AI rate limit — waiting {wait}s (attempt {attempt+1}/4)...")
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        return resp.json()["result"]["data"][0]
+    raise RuntimeError("embed() failed after 4 retries — rate limit persists.")
 
 
 def vectorize_query(question: str, top_k: int = 20, domain: str = None) -> list:
@@ -170,16 +179,16 @@ def _fetch_image_b64(url: str, save_dir: Path, name: str) -> str:
 # ---------------------------------------------------------------------------
 # Intel generation via Gemini
 # ---------------------------------------------------------------------------
-def generate_intel(domains: list) -> dict:
+def generate_intel(domains: list, focus: str = None) -> dict:
     client   = genai.Client(api_key=GEMINI_KEY)
     sections = {}
 
     for d in domains:
-        sections[d] = {
-            "pricing":     chunks_for(d, "pricing tiers cost plans price per month"),
-            "features":    chunks_for(d, "features capabilities product functionality"),
-            "positioning": chunks_for(d, "about company product description target audience"),
-        }
+        sections[d] = {}
+        # Small delay between each embed call to stay under Workers AI rate limit
+        sections[d]["pricing"]     = chunks_for(d, "pricing tiers cost plans price per month");     time.sleep(1)
+        sections[d]["features"]    = chunks_for(d, "features capabilities product functionality");   time.sleep(1)
+        sections[d]["positioning"] = chunks_for(d, "about company product description target audience")
 
     context_block = ""
     for d, s in sections.items():
@@ -228,19 +237,40 @@ def generate_intel(domains: list) -> dict:
         '}'
     )
 
+    focus_instruction = (
+        f"\n\nFOCUS: The user specifically wants emphasis on **{focus}**. "
+        f"Prioritize {focus}-related details in pricing_tiers, top_features, strengths, "
+        f"and the recommendation fields."
+    ) if focus else ""
+
     prompt = (
         "You are a competitive intelligence analyst. Based solely on the context below, "
         "produce a structured JSON report.\n\n"
         "CONTEXT:\n" + context_block + "\n\n"
         "Return ONLY valid JSON (no markdown fences) matching this exact schema:\n" + schema
+        + focus_instruction
     )
 
-    res  = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-    text = res.text.strip()
-    if "```" in text:
-        text = text.split("```")[1].lstrip("json").strip()
-        text = text.split("```")[0].strip()
-    return json.loads(text)
+    for attempt in range(3):
+        res  = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        text = res.text.strip()
+        # Strip markdown fences if present
+        if "```" in text:
+            text = text.split("```")[1].lstrip("json").strip()
+            text = text.split("```")[0].strip()
+        # Extract outermost JSON object robustly
+        start = text.find('{')
+        end   = text.rfind('}')
+        if start != -1 and end != -1:
+            text = text[start:end + 1]
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            print(f"  generate_intel JSON parse error (attempt {attempt+1}/3): {e}")
+            if attempt == 2:
+                raise
+            time.sleep(5)
+    raise RuntimeError("generate_intel failed after 3 attempts")
 
 
 # ---------------------------------------------------------------------------

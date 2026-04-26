@@ -12,6 +12,7 @@ Requires:
 
 import os
 import io
+import time
 import base64
 import json
 import requests
@@ -422,7 +423,7 @@ def slide_action_items(prs, gtm: dict):
 # ---------------------------------------------------------------------------
 # GTM content generation (separate from intel — marketing-specific)
 # ---------------------------------------------------------------------------
-def generate_gtm(domains: list, intel: dict) -> dict:
+def generate_gtm(domains: list, intel: dict, focus: str = None) -> dict:
     client = genai.Client(api_key=GEMINI_KEY)
 
     context = ""
@@ -433,6 +434,10 @@ def generate_gtm(domains: list, intel: dict) -> dict:
         )
 
     names = [intel["domains"][d]["display_name"] for d in domains]
+    focus_instruction = (
+        f"\n\nFOCUS: The user wants the GTM strategy to emphasize **{focus}**. "
+        f"Tailor key_messages, objections, and action_items specifically around {focus}."
+    ) if focus else ""
     prompt = (
         "You are a B2B marketing strategist. Based on the competitive context below, "
         "generate actionable GTM (go-to-market) content.\n\n"
@@ -444,14 +449,27 @@ def generate_gtm(domains: list, intel: dict) -> dict:
         '  "objections": ["3-4 common objections and one-line rebuttals"],\n'
         '  "action_items": ["6-8 specific next steps for the GTM team"]\n'
         "}"
+        + focus_instruction
     )
 
-    res  = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-    text = res.text.strip()
-    if "```" in text:
-        text = text.split("```")[1].lstrip("json").strip()
-        text = text.split("```")[0].strip()
-    return json.loads(text)
+    for attempt in range(3):
+        res  = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        text = res.text.strip()
+        if "```" in text:
+            text = text.split("```")[1].lstrip("json").strip()
+            text = text.split("```")[0].strip()
+        start = text.find('{')
+        end   = text.rfind('}')
+        if start != -1 and end != -1:
+            text = text[start:end + 1]
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            print(f"  generate_gtm JSON parse error (attempt {attempt+1}/3): {e}")
+            if attempt == 2:
+                raise
+            time.sleep(5)
+    raise RuntimeError("generate_gtm failed after 3 attempts")
 
 
 # ---------------------------------------------------------------------------
