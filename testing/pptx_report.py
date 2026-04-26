@@ -106,7 +106,7 @@ def add_text(slide, text: str, x, y, w, h,
     p  = tf.paragraphs[0]
     p.alignment = align
     run = p.add_run()
-    run.text = text
+    run.text = text if isinstance(text, str) else str(text)
     run.font.size  = Pt(size)
     run.font.bold  = bold
     run.font.color.rgb = color
@@ -124,7 +124,7 @@ def add_text_lines(slide, lines: list, x, y, w, h,
         first = False
         p.space_before = Pt(4)
         run = p.add_run()
-        run.text = ("• " if bullet else "") + line
+        run.text = ("• " if bullet else "") + (line if isinstance(line, str) else " — ".join(str(v) for v in line.values() if v) if isinstance(line, dict) else str(line))
         run.font.size  = Pt(size)
         run.font.color.rgb = color
 
@@ -463,7 +463,18 @@ def generate_gtm(domains: list, intel: dict, focus: str = None) -> dict:
         if start != -1 and end != -1:
             text = text[start:end + 1]
         try:
-            return json.loads(text)
+            result = json.loads(text)
+            # Normalize list fields — Gemini sometimes returns dicts instead of strings
+            def _to_str(item):
+                if isinstance(item, str):
+                    return item
+                if isinstance(item, dict):
+                    return " — ".join(str(v) for v in item.values() if v)
+                return str(item)
+            for key in ("key_messages", "objections", "action_items"):
+                if key in result and isinstance(result[key], list):
+                    result[key] = [_to_str(i) for i in result[key]]
+            return result
         except json.JSONDecodeError as e:
             print(f"  generate_gtm JSON parse error (attempt {attempt+1}/3): {e}")
             if attempt == 2:
