@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/kkati/Kushagra/personal/Riva -type d -not -path */node_modules* -not -path */.next* -not -path */.git* -not -path */__pycache__* -not -path */.browser_profiles* -not -path */.wrangler*)"
+    ]
+  }
+}

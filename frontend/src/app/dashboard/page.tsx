@@ -2,30 +2,30 @@
 
 import { useEffect, useRef, useState, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Shield, Play, Pause, ArrowRight, MessageCircle, X, Send, Download } from 'lucide-react';
+import { Play, Pause, ArrowRight, X, Send, Download, Maximize2, Minimize2 } from 'lucide-react';
 
 type Thought     = { text: string; state: string; ts: string };
 type PipelineLog = { text: string; state: string; ts: string };
 type ChatMsg     = { role: 'assistant' | 'user'; text: string; ts: string };
 
 const STATE_COLORS: Record<string, string> = {
-  info:       '#aaaaaa',
-  navigating: '#00ccff',
-  scanning:   '#ffcc00',
-  found:      '#00ff88',
-  hovering:   '#bb88ff',
-  clicking:   '#ff8800',
-  hitl:       '#ff4466',
-  complete:   '#00ff88',
-  error:      '#ff3333',
-  user:       '#ffffff',
-  success:    '#00ff88',
+  info:       '#8a8a9e',
+  navigating: '#6eb0e8',
+  scanning:   '#c8a84a',
+  found:      '#6dc08a',
+  hovering:   '#9b7fd4',
+  clicking:   '#d4874a',
+  hitl:       '#d45070',
+  complete:   '#6dc08a',
+  error:      '#d46060',
+  user:       '#e8e0f0',
+  success:    '#6dc08a',
 };
 
 const PIPELINE_STATE_COLORS: Record<string, string> = {
-  info:    '#888888',
-  success: '#00cccc',
-  error:   '#ff3333',
+  info:    '#7a7a8e',
+  success: '#6eb0c8',
+  error:   '#d46060',
 };
 
 function now() {
@@ -34,38 +34,216 @@ function now() {
   });
 }
 
-// ThoughtLog — per-browser AI stream
-function ThoughtLog({
-  thoughts, label, color,
-}: { thoughts: Thought[]; label: string; color: string }) {
-  const bottomRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [thoughts]);
+// ---------------------------------------------------------------------------
+// SmallEye — animated eye synced to agent state
+// ---------------------------------------------------------------------------
+function SmallEye({ color, bgFill, darkFill, lidFill, glowId, size = 44, agentState = 'info' }: {
+  color: string;
+  bgFill: string;
+  darkFill: string;
+  lidFill: string;
+  glowId: string;
+  size?: number;
+  agentState?: string;
+}) {
+  const pupilRef = useRef<SVGGElement>(null);
+  const lidRef   = useRef<SVGRectElement>(null);
+  const modeRef  = useRef<string>('idle');
+
+  // Sync mode to agent state
+  useEffect(() => {
+    if (['navigating', 'scanning', 'hovering', 'clicking'].includes(agentState)) {
+      modeRef.current = 'thinking';
+    } else if (['found', 'success'].includes(agentState)) {
+      modeRef.current = 'found';
+    } else if (agentState === 'complete') {
+      modeRef.current = 'complete';
+      // Rapid blink sequence then calm
+      let count = 0;
+      const rapidBlink = () => {
+        if (count >= 8 || !lidRef.current) return;
+        lidRef.current.style.transform = 'translateY(0%)';
+        setTimeout(() => { if (lidRef.current) lidRef.current.style.transform = 'translateY(-100%)'; }, 90);
+        count++;
+        setTimeout(rapidBlink, 190);
+      };
+      setTimeout(rapidBlink, 150);
+    } else if (agentState === 'hitl' || agentState === 'error') {
+      modeRef.current = 'alert';
+    } else {
+      modeRef.current = 'idle';
+    }
+  }, [agentState]);
+
+  // Animation loop
+  useEffect(() => {
+    let alive = true;
+
+    function blink() {
+      if (!lidRef.current) return;
+      lidRef.current.style.transform = 'translateY(0%)';
+      setTimeout(() => { if (lidRef.current) lidRef.current.style.transform = 'translateY(-100%)'; }, 130);
+    }
+
+    function setGlow(r: number) {
+      const el = document.getElementById(glowId) as SVGCircleElement | null;
+      if (el) el.setAttribute('r', String(r));
+    }
+
+    function loop() {
+      if (!alive || !pupilRef.current) return;
+      const mode = modeRef.current;
+
+      if (mode === 'thinking') {
+        // Fast erratic looking-around
+        const x = (Math.random() - 0.5) * 46;
+        const y = (Math.random() - 0.5) * 24;
+        pupilRef.current.style.transform = `translate(${x}px, ${y}px)`;
+        setGlow(Math.random() > 0.4 ? 4 : 2.5);
+        setTimeout(loop, Math.random() * 350 + 120);
+      } else if (mode === 'found') {
+        // Dilated, slow gentle drift
+        const x = (Math.random() - 0.5) * 8;
+        const y = (Math.random() - 0.5) * 5;
+        pupilRef.current.style.transform = `translate(${x}px, ${y}px)`;
+        setGlow(11); // big dilation
+        setTimeout(loop, Math.random() * 2500 + 1800);
+      } else if (mode === 'complete') {
+        // Centered, small pupil, very slow
+        pupilRef.current.style.transform = 'translate(0px, 0px)';
+        setGlow(3);
+        setTimeout(loop, 5000);
+      } else if (mode === 'alert') {
+        // Darting left-right
+        const x = (Math.random() - 0.5) * 22;
+        pupilRef.current.style.transform = `translate(${x}px, 2px)`;
+        setGlow(3);
+        setTimeout(loop, Math.random() * 250 + 150);
+      } else {
+        // Idle: gentle drifting
+        const x = (Math.random() - 0.5) * 28;
+        const y = (Math.random() - 0.5) * 14;
+        pupilRef.current.style.transform = `translate(${x}px, ${y}px)`;
+        setGlow(Math.random() > 0.5 ? 5.5 : 3);
+        if (Math.random() > 0.82) blink();
+        setTimeout(loop, Math.random() * 2400 + 900);
+      }
+    }
+
+    loop();
+    return () => { alive = false; };
+  }, [glowId]);
 
   return (
-    <div className="flex flex-col h-32 overflow-y-auto border-b bg-[#020609] border-white/5 font-mono">
-      <div
-        className="flex items-center gap-2 px-3 py-1.5 border-b text-[9px] font-bold tracking-[3px] uppercase sticky top-0 bg-[#030810]"
-        style={{ color }}
-      >
-        <span>◈</span> {label} STREAM
+    <svg viewBox="0 0 80 48" style={{ width: size, overflow: 'visible', flexShrink: 0 }}>
+      <defs>
+        <clipPath id={`clip-${glowId}`}>
+          <path d="M3,24 Q40,-7 77,24 Q40,55 3,24" />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#clip-${glowId})`}>
+        <path d="M3,24 Q40,-7 77,24 Q40,55 3,24" fill={bgFill} />
+        <g ref={pupilRef} style={{ transition: 'transform 0.3s cubic-bezier(0.175,0.885,0.32,1.275)' }}>
+          <circle cx="40" cy="24" r="14" fill={darkFill} />
+          <circle id={glowId} cx="40" cy="24" r="4.5" fill={color}
+            style={{ filter: `drop-shadow(0 0 8px ${color})`, transition: 'r 0.35s ease' }} />
+        </g>
+        <rect ref={lidRef} width="80" height="48" fill={lidFill}
+          style={{ transform: 'translateY(-100%)', transition: 'transform 0.11s ease-in-out' }} />
+      </g>
+      <path d="M3,24 Q40,-7 77,24" fill="none" stroke={color} strokeWidth="1.2" opacity="0.3" />
+    </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MiniLog — eye in header, synced to agent, shared expand state
+// ---------------------------------------------------------------------------
+function MiniLog({
+  thoughts, color, accentColor, domain, eyeBgFill, eyeDarkFill, eyeLidFill, glowId,
+  expanded, onToggle,
+}: {
+  thoughts: Thought[];
+  color: string;
+  accentColor: string;
+  domain: string;
+  eyeBgFill: string;
+  eyeDarkFill: string;
+  eyeLidFill: string;
+  glowId: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (expanded && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [thoughts, expanded]);
+
+  const lastThought = thoughts[thoughts.length - 1];
+  const agentState  = lastThought?.state || 'info';
+
+  return (
+    <div className="shrink-0 overflow-hidden"
+      style={{
+        height: expanded ? 200 : 54,
+        transition: 'height 0.25s ease',
+        background: 'rgba(0,0,0,0.28)',
+      }}>
+      <div className="flex items-center justify-between px-2.5 shrink-0"
+        style={{
+          height: 54,
+          background: 'rgba(0,0,0,0.22)',
+          borderBottom: expanded ? `1px solid ${accentColor}22` : 'none',
+        }}>
+        <div className="flex items-center gap-3">
+          <SmallEye color={color} bgFill={eyeBgFill} darkFill={eyeDarkFill}
+            lidFill={eyeLidFill} glowId={glowId} size={52} agentState={agentState} />
+          {domain && (
+            <span style={{ color: 'rgba(255,255,255,0.75)', fontSize: 10,
+              fontFamily: "'DM Sans', system-ui, sans-serif", letterSpacing: '0.5px', fontWeight: 500 }}>
+              {domain}
+            </span>
+          )}
+        </div>
+        <button onClick={onToggle} style={{ color: 'rgba(255,255,255,0.3)' }}
+          className="hover:text-white/60 transition-colors p-2">
+          {expanded ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
+        </button>
       </div>
-      <div className="flex-1 px-3 py-2 space-y-0.5">
-        {thoughts.map((t, i) => (
-          <div key={i} className="flex items-start gap-2 text-[10px] leading-5">
-            <span className="shrink-0 text-white/20">[{t.ts}]</span>
-            <span style={{ color: STATE_COLORS[t.state] ?? '#ccc' }}>{t.text}</span>
-          </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
+
+      {expanded && (
+        <div ref={scrollRef} className="overflow-y-auto px-3 py-2 space-y-0.5"
+          style={{ height: 146, fontFamily: "'Fira Code', monospace" }}>
+          {thoughts.length === 0 && (
+            <div style={{ fontSize: 10, color: '#3a3a4e' }}>waiting...</div>
+          )}
+          {thoughts.map((t, i) => (
+            <div key={i} style={{ display: 'flex', gap: 8, fontSize: 10, lineHeight: '19px' }}>
+              <span style={{ flexShrink: 0, color: 'rgba(255,255,255,0.13)' }}>[{t.ts}]</span>
+              <span style={{ color: STATE_COLORS[t.state] ?? '#9a9ab0' }}>{t.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!expanded && lastThought && (
+        <div style={{ padding: '0 12px', display: 'flex', gap: 8, fontSize: 10,
+          lineHeight: '19px', fontFamily: "'Fira Code', monospace",
+          position: 'absolute', bottom: 0, left: 0, right: 0, height: 0, overflow: 'visible' }}>
+        </div>
+      )}
     </div>
   );
 }
 
-
+// ---------------------------------------------------------------------------
 // BrowserPanel
+// ---------------------------------------------------------------------------
 function BrowserPanel({
-  label, color, frameSrc, active, isPaused, isComplete, wsActive,
+  label, frameSrc, active, isPaused, isComplete, wsActive,
   stuckMilestone, onTogglePause, onInteraction, onGoto, onRestart,
 }: any) {
   const [manualUrl, setManualUrl] = useState('');
@@ -78,95 +256,96 @@ function BrowserPanel({
 
   function submitGoto() {
     if (!manualUrl.trim()) return;
-    if (!wsActive) {
-      // No active browser — open a new Chrome instance from this URL
-      onRestart?.(manualUrl.trim());
-    } else {
-      onGoto?.(manualUrl.trim());
-    }
+    if (!wsActive) { onRestart?.(manualUrl.trim()); } else { onGoto?.(manualUrl.trim()); }
     setManualUrl('');
   }
 
   return (
-    <div className="flex flex-col flex-1 rounded-b-lg overflow-hidden border border-white/5 bg-[#020609]">
-      <div className="flex items-center gap-2 px-3 py-2 bg-[#08111f] border-b border-white/5 shrink-0">
+    <div className="flex flex-col flex-1 overflow-hidden" style={{ background: 'rgba(0,0,0,0.35)' }}>
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-white/5 shrink-0"
+        style={{ background: 'rgba(0,0,0,0.22)' }}>
         {isComplete ? (
-          <div
-            className="flex items-center gap-1.5 px-3 py-1 rounded font-bold text-[9px] tracking-widest shrink-0"
-            style={{ background: 'rgba(0,255,136,0.1)', color: '#00ff88', border: '1px solid #00ff8844' }}
-          >
-            ✓ COMPLETED
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0"
+            style={{ background: 'rgba(109,192,138,0.1)', color: '#6dc08a',
+              border: '1px solid rgba(109,192,138,0.22)', fontSize: 9, fontWeight: 500,
+              letterSpacing: '1.5px', fontFamily: "'DM Sans', sans-serif" }}>
+            ✓ complete
           </div>
         ) : (
-          <button
-            onClick={onTogglePause}
-            className="flex items-center gap-1.5 px-3 py-1 rounded font-bold text-[9px] tracking-widest transition-all shrink-0"
+          <button onClick={onTogglePause}
+            className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
             style={{
-              background: isPaused ? 'rgba(255,204,0,0.2)' : 'rgba(0,255,255,0.1)',
-              color:      isPaused ? '#ffcc00' : '#00ffff',
-              border:     `1px solid ${isPaused ? '#ffcc00' : '#00ffff'}44`,
-            }}
-          >
-            {isPaused ? <Play size={10} fill="currentColor" /> : <Pause size={10} fill="currentColor" />}
-            {isPaused ? 'RESUME' : 'PAUSE'}
+              background: isPaused ? 'rgba(109,192,138,0.15)' : 'rgba(255,255,255,0.92)',
+              color:      isPaused ? '#6dc08a' : '#140e28',
+              border:     `1px solid ${isPaused ? 'rgba(109,192,138,0.5)' : 'rgba(255,255,255,0.8)'}`,
+              fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
+              fontFamily: "'DM Sans', sans-serif",
+            }}>
+            {isPaused ? <Play size={9} fill="currentColor" /> : <Pause size={9} fill="currentColor" />}
+            {isPaused ? 'resume' : 'pause'}
           </button>
         )}
         <div className="flex-1 flex gap-2">
-          <input
-            className="flex-1 bg-black/40 border border-white/10 rounded px-2 py-1 text-[9px] font-mono outline-none"
-            style={{ color: wsActive ? '#00ffff' : '#ffffff88' }}
-            placeholder={wsActive ? 'Paste URL to navigate...' : 'Paste URL to open new browser...'}
+          <input className="flex-1 rounded px-2 py-1 outline-none"
+            style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.1)',
+              color: 'rgba(255,255,255,0.9)',
+              fontSize: 9, fontFamily: "'Fira Code', monospace" }}
+            placeholder={wsActive ? 'navigate to url...' : 'open url in new browser...'}
             value={manualUrl}
             onChange={e => setManualUrl(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submitGoto(); } }}
           />
-          <button onClick={submitGoto} className="p-1 shrink-0 text-white/30 hover:text-[#00ffff] transition-colors">
+          <button onClick={submitGoto} className="p-1 shrink-0 transition-colors"
+            style={{ color: 'rgba(255,255,255,0.3)' }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.7)'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.3)'; }}>
             <ArrowRight size={12} />
           </button>
         </div>
       </div>
-      <div
-        className="relative flex-1 bg-black flex items-center justify-center overflow-hidden"
+
+      <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden"
         onClick={handleClick}
-        style={{ cursor: active && frameSrc && !isComplete ? 'crosshair' : 'default' }}
-      >
+        style={{ cursor: active && frameSrc && !isComplete ? 'crosshair' : 'default' }}>
         {frameSrc ? (
-          <img
-            src={frameSrc}
-            className="w-full h-full object-contain pointer-events-none select-none"
-            style={{ opacity: isComplete ? 0.35 : 1, filter: isComplete ? 'grayscale(0.4)' : 'none' }}
-            alt="preview"
-          />
+          <img src={frameSrc} className="w-full h-full object-contain pointer-events-none select-none"
+            style={{ opacity: isComplete ? 0.35 : 1, filter: isComplete ? 'grayscale(0.5)' : 'none' }}
+            alt="preview" />
         ) : (
-          <div className="flex flex-col items-center gap-2">
-            <div className="text-white/5 text-[10px] tracking-[4px] uppercase">{label} OFFLINE</div>
-            {!wsActive && (
-              <div className="text-white/10 text-[9px]">Enter a URL above to open a browser</div>
-            )}
+          <div style={{ color: 'rgba(255,255,255,0.06)', fontSize: 10, letterSpacing: '3px',
+            fontFamily: "'DM Sans', sans-serif" }}>
+            {label} offline
           </div>
         )}
         {isPaused && !isComplete && (
-          <div className="absolute inset-0 border-2 border-yellow-500/20 pointer-events-none shadow-[inset_0_0_80px_rgba(234,179,8,0.1)]" />
+          <div className="absolute inset-0 pointer-events-none"
+            style={{ border: '2px solid rgba(109,192,138,0.15)',
+              boxShadow: 'inset 0 0 60px rgba(109,192,138,0.04)' }} />
         )}
         {stuckMilestone && !isComplete && (
           <div className="absolute bottom-0 left-0 right-0 px-4 py-3 flex flex-col gap-1.5"
             style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.92) 80%, transparent)' }}>
-            <div className="text-[10px] font-bold tracking-[2px] uppercase" style={{ color: '#ffcc00' }}>
-              ⚠ Couldn't find {stuckMilestone}
+            <div style={{ fontSize: 10, fontWeight: 600, color: '#c8a84a', letterSpacing: '1.5px',
+              fontFamily: "'DM Sans', sans-serif" }}>
+              ⚠ couldn&apos;t find {stuckMilestone}
             </div>
-            <div className="text-[10px] text-white/50 leading-5">
-              Paste the <span className="text-white/80">{stuckMilestone}</span> URL in the bar above ↑ — agent will resume automatically.
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', lineHeight: '19px',
+              fontFamily: "'Fira Code', monospace" }}>
+              paste the <span style={{ color: 'rgba(255,255,255,0.85)' }}>{stuckMilestone}</span> url above ↑
             </div>
           </div>
         )}
         {isComplete && frameSrc && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div
-              className="flex flex-col items-center gap-2 px-6 py-4 rounded-xl"
-              style={{ background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(0,255,136,0.25)' }}
-            >
-              <div className="text-[#00ff88] text-[11px] font-bold tracking-[4px] uppercase">✓ Scraping Complete</div>
-              <div className="text-white/30 text-[9px] tracking-wider">Browser closed</div>
+            <div className="flex flex-col items-center gap-2 px-6 py-4 rounded-xl"
+              style={{ background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(109,192,138,0.2)' }}>
+              <div style={{ color: '#6dc08a', fontSize: 11, fontWeight: 500, letterSpacing: '2.5px',
+                fontFamily: "'DM Sans', sans-serif" }}>
+                ✓ scraping complete
+              </div>
+              <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 9, fontFamily: "'Fira Code', monospace" }}>
+                browser closed
+              </div>
             </div>
           </div>
         )}
@@ -176,66 +355,66 @@ function BrowserPanel({
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline log — terminal-style area below browsers
+// InferenceLogPanel
 // ---------------------------------------------------------------------------
-function PipelineLogPanel({
-  logs, status, reportReady, onOpenChat, onViewReport,
+function InferenceLogPanel({
+  logs, status, reportReady, onViewReport, bottomExpanded, onToggleBottom,
 }: {
   logs: PipelineLog[];
   status: string;
   reportReady: boolean;
-  onOpenChat: () => void;
   onViewReport: () => void;
+  bottomExpanded: boolean;
+  onToggleBottom: () => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
 
-  const statusColor =
-    status === 'ready' ? '#00cccc' : status === 'vectorizing' ? '#ffcc00' : '#888888';
+  const statusColor = status === 'ready' ? '#6eb0c8' : status === 'vectorizing' ? '#c8a84a' : '#4a4a58';
 
   return (
-    <div className="flex flex-col h-52 shrink-0 border-t border-white/5 bg-[#010508] font-mono">
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/5 bg-[#020810] shrink-0">
-        <div className="flex items-center gap-2 text-[9px] font-bold tracking-[3px] uppercase text-[#00cccc]">
-          <span>▶</span> PIPELINE
-          <span
-            className="ml-2 px-1.5 py-0.5 rounded text-[8px] font-bold"
-            style={{ background: statusColor + '22', color: statusColor }}
-          >
-            {status.toUpperCase()}
+    <div className="flex flex-col h-full border-r border-white/5"
+      style={{ background: 'rgba(0,0,0,0.28)', fontFamily: "'Fira Code', monospace" }}>
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/5 shrink-0"
+        style={{ background: 'rgba(0,0,0,0.18)' }}>
+        <div className="flex items-center gap-2">
+          <span style={{ color: '#c8a84a', fontSize: 9, fontWeight: 500, letterSpacing: '2px',
+            fontFamily: "'DM Sans', sans-serif" }}>
+            Inference Logs
+          </span>
+          <span style={{ background: statusColor + '1a', color: statusColor, fontSize: 8,
+            fontWeight: 500, padding: '1px 6px', borderRadius: 3, letterSpacing: '0.5px',
+            fontFamily: "'DM Sans', sans-serif" }}>
+            {status}
           </span>
         </div>
         <div className="flex items-center gap-2">
           {reportReady && (
-            <button
-              onClick={onViewReport}
-              className="flex items-center gap-1.5 px-2 py-1 rounded text-[9px] font-bold tracking-widest transition-all animate-pulse"
-              style={{ background: 'rgba(0,168,107,0.15)', color: '#00a86b', border: '1px solid #00a86b55' }}
-            >
-              <Download size={10} />
-              VIEW REPORT
+            <button onClick={onViewReport}
+              className="flex items-center gap-1.5 px-2 py-1 rounded transition-all animate-pulse"
+              style={{ background: 'rgba(109,192,138,0.1)', color: '#6dc08a',
+                border: '1px solid rgba(109,192,138,0.25)', fontSize: 9,
+                fontFamily: "'DM Sans', sans-serif", letterSpacing: '0.5px' }}>
+              <Download size={9} />
+              view report
             </button>
           )}
-          <button
-            onClick={onOpenChat}
-            className="flex items-center gap-1.5 px-2 py-1 rounded text-[9px] font-bold tracking-widest transition-all"
-            style={{ background: 'rgba(0,204,204,0.1)', color: '#00cccc', border: '1px solid #00cccc44' }}
-          >
-            <MessageCircle size={10} />
-            CHAT
+          <button onClick={onToggleBottom} style={{ color: 'rgba(255,255,255,0.25)' }}
+            className="hover:text-white/60 transition-colors p-0.5">
+            {bottomExpanded ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
           </button>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5">
+      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5 min-h-0">
         {logs.length === 0 && (
-          <div className="text-[10px] text-white/15 tracking-wider">
-            Pipeline active — will vectorize each domain as agents complete...
+          <div style={{ fontSize: 10, color: '#2e2e3e' }}>
+            will vectorize each domain as agents complete...
           </div>
         )}
         {logs.map((l, i) => (
-          <div key={i} className="flex items-start gap-2 text-[10px] leading-5">
-            <span className="shrink-0 text-white/20">[{l.ts}]</span>
-            <span style={{ color: PIPELINE_STATE_COLORS[l.state] ?? '#888' }}>{l.text}</span>
+          <div key={i} style={{ display: 'flex', gap: 8, fontSize: 10, lineHeight: '19px' }}>
+            <span style={{ flexShrink: 0, color: 'rgba(255,255,255,0.2)' }}>[{l.ts}]</span>
+            <span style={{ color: PIPELINE_STATE_COLORS[l.state] ?? '#6a6a7e' }}>{l.text}</span>
           </div>
         ))}
         <div ref={bottomRef} />
@@ -245,194 +424,157 @@ function PipelineLogPanel({
 }
 
 // ---------------------------------------------------------------------------
-// Report modal — full-screen centered viewer
+// InlineChatPanel
 // ---------------------------------------------------------------------------
-function ReportModal({
-  reportUrl, reportType, onClose,
-}: { reportUrl: string; reportType: 'pdf' | 'pptx'; onClose: () => void }) {
-  const fullUrl = `http://localhost:8000${reportUrl}`;
-  const label   = reportType === 'pdf' ? 'ONE-PAGER REPORT' : 'POWERPOINT DECK';
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-auto py-6 px-4"
-      style={{ background: 'rgba(0,0,0,0.88)' }}
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div
-        className="relative w-full flex flex-col rounded-xl overflow-hidden shadow-2xl"
-        style={{ maxWidth: 960, maxHeight: '90vh', background: '#0a1628', border: '1px solid rgba(0,204,204,0.2)' }}
-      >
-        {/* Modal header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b shrink-0"
-          style={{ borderColor: 'rgba(0,204,204,0.15)' }}>
-          <div className="text-[10px] font-bold tracking-[3px] uppercase text-[#00cccc]">
-            ◈ {label}
-          </div>
-          <div className="flex items-center gap-2">
-            <a
-              href={fullUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[9px] font-bold tracking-widest transition-all"
-              style={{ background: 'rgba(0,204,204,0.1)', color: '#00cccc', border: '1px solid #00cccc44' }}
-            >
-              Open in new tab
-            </a>
-            <button
-              onClick={onClose}
-              className="p-1.5 rounded text-white/30 hover:text-white transition-colors"
-              style={{ border: '1px solid rgba(255,255,255,0.1)' }}
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-auto" style={{ minHeight: 0 }}>
-          {reportType === 'pdf' ? (
-            <div className="flex flex-col items-center justify-center gap-6 py-16">
-              <div className="text-white/30 text-[11px] tracking-[3px] uppercase">
-                PDF report ready
-              </div>
-              <a
-                href={fullUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-2 px-6 py-3 rounded-lg font-bold text-[13px] tracking-widest transition-all"
-                style={{ background: 'rgba(0,204,204,0.15)', color: '#00cccc', border: '1px solid #00cccc55' }}
-              >
-                <Download size={18} />
-                Open / Download PDF
-              </a>
-              <div className="text-white/15 text-[10px]">
-                Opens in a new tab — use your browser&apos;s save button to download
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center gap-6 py-16">
-              <div className="text-white/30 text-[11px] tracking-[3px] uppercase">
-                PowerPoint deck ready
-              </div>
-              <a
-                href={fullUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-2 px-6 py-3 rounded-lg font-bold text-[13px] tracking-widest transition-all"
-                style={{ background: 'rgba(0,204,204,0.15)', color: '#00cccc', border: '1px solid #00cccc55' }}
-              >
-                <Download size={18} />
-                Download PowerPoint
-              </a>
-              <div className="text-white/15 text-[10px]">
-                Open in Microsoft PowerPoint or Google Slides
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Chat drawer — slides in from right
-// ---------------------------------------------------------------------------
-function ChatDrawer({
-  messages, onSend, onClose, pipelineReady,
+function InlineChatPanel({
+  messages, onSend, pipelineReady, pipelineStatus, bottomExpanded, onToggleBottom,
 }: {
   messages: ChatMsg[];
   onSend: (text: string) => void;
-  onClose: () => void;
   pipelineReady: boolean;
+  pipelineStatus: string;
+  bottomExpanded: boolean;
+  onToggleBottom: () => void;
 }) {
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
+  // Map pipeline status to eye state
+  const chatEyeState = pipelineStatus === 'vectorizing' ? 'scanning'
+    : pipelineStatus === 'ready' ? 'found'
+    : 'info';
+
   function send() {
-    if (!input.trim()) return;
+    if (!input.trim() || !pipelineReady) return;
     onSend(input.trim());
     setInput('');
   }
 
   return (
-    <div
-      className="fixed right-0 top-0 h-full w-80 flex flex-col z-50 border-l border-white/10"
-      style={{ background: '#020c1a' }}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
-        <div className="text-[10px] font-bold tracking-[3px] uppercase text-[#00cccc]">
-          ◈ RIVA CHAT
+    <div className="flex flex-col h-full" style={{ background: 'rgba(0,0,0,0.18)' }}>
+      <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-white/5 shrink-0"
+        style={{ background: 'rgba(0,0,0,0.18)' }}>
+        <div className="flex items-center gap-2">
+          <SmallEye color="#4db8ff" bgFill="#e0f7fa" darkFill="#001a2e" lidFill="#1a0d40"
+            glowId="chat-eye-glow" size={40} agentState={chatEyeState} />
+          <span style={{ color: 'rgba(255,255,255,0.8)', fontSize: 10, fontWeight: 500,
+            letterSpacing: '0.5px', fontFamily: "'DM Sans', sans-serif" }}>
+            Riva Chat
+          </span>
         </div>
-        <button onClick={onClose} className="text-white/30 hover:text-white transition-colors">
-          <X size={16} />
+        <button onClick={onToggleBottom} style={{ color: 'rgba(255,255,255,0.25)' }}
+          className="hover:text-white/60 transition-colors p-0.5">
+          {bottomExpanded ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
         </button>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 font-mono">
+      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2.5 min-h-0"
+        style={{ fontFamily: "'Fira Code', monospace" }}>
         {messages.length === 0 && (
-          <div className="text-[10px] text-white/20 leading-6 tracking-wide">
-            The pipeline will auto-message you when analysis is complete. You can also ask questions once data is vectorized.
+          <div style={{ fontSize: 10, color: '#2e2e3e', lineHeight: '19px' }}>
+            pipeline will message you when analysis is complete.
           </div>
         )}
         {messages.map((m, i) => (
-          <div
-            key={i}
-            className={`flex flex-col gap-1 ${m.role === 'user' ? 'items-end' : 'items-start'}`}
-          >
-            <div
-              className="text-[9px] font-bold tracking-[2px] uppercase"
-              style={{ color: m.role === 'assistant' ? '#00cccc' : '#ffffff44' }}
-            >
-              {m.role === 'assistant' ? 'RIVA' : 'YOU'}
+          <div key={i} className={`flex flex-col gap-0.5 ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+            <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: '1px',
+              color: m.role === 'assistant' ? '#9580c8' : 'rgba(255,255,255,0.4)',
+              fontFamily: "'DM Sans', sans-serif" }}>
+              {m.role === 'assistant' ? 'riva' : 'you'}
             </div>
-            <div
-              className="max-w-[240px] px-3 py-2 rounded text-[11px] leading-5 whitespace-pre-wrap"
-              style={
-                m.role === 'assistant'
-                  ? { background: '#0d2040', color: '#cde' }
-                  : { background: 'rgba(0,204,204,0.12)', color: '#fff' }
-              }
-            >
+            <div style={{
+              maxWidth: 260, padding: '5px 11px', borderRadius: 6, fontSize: 10,
+              lineHeight: '18px', whiteSpace: 'pre-wrap',
+              ...(m.role === 'assistant'
+                ? { background: 'rgba(149,128,200,0.09)', color: '#cec0e8', border: '1px solid rgba(149,128,200,0.14)' }
+                : { background: 'rgba(77,184,255,0.07)', color: 'rgba(255,255,255,0.9)', border: '1px solid rgba(77,184,255,0.12)' })
+            }}>
               {m.text}
             </div>
-            <div className="text-[8px] text-white/15">{m.ts}</div>
+            <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.15)' }}>{m.ts}</div>
           </div>
         ))}
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
-      <div className="px-3 py-3 border-t border-white/10 shrink-0">
+      <div className="px-3 py-2 border-t border-white/5 shrink-0">
         {!pipelineReady && (
-          <div className="text-[9px] text-white/20 mb-2 tracking-wide">
-            Chat available after vectorization completes
+          <div style={{ fontSize: 9, color: '#3a3a4e', marginBottom: 5, fontFamily: "'DM Sans', sans-serif" }}>
+            available after vectorization
           </div>
         )}
         <div className="flex gap-2">
-          <input
-            className="flex-1 bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white font-mono outline-none placeholder-white/20"
-            placeholder={pipelineReady ? 'Ask a question...' : 'Waiting...'}
+          <input className="flex-1 rounded px-3 py-1.5 outline-none"
+            style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.1)',
+              color: 'rgba(255,255,255,0.9)', fontSize: 10, fontFamily: "'Fira Code', monospace" }}
+            placeholder={pipelineReady ? 'ask something...' : 'waiting...'}
             value={input}
             disabled={!pipelineReady}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }}
           />
-          <button
-            onClick={send}
-            disabled={!pipelineReady || !input.trim()}
-            className="p-2 rounded transition-all"
+          <button onClick={send} disabled={!pipelineReady || !input.trim()}
+            className="p-1.5 rounded transition-all"
             style={{
-              background: pipelineReady && input.trim() ? 'rgba(0,204,204,0.2)' : 'rgba(255,255,255,0.05)',
-              color:      pipelineReady && input.trim() ? '#00cccc' : '#ffffff22',
-            }}
-          >
-            <Send size={14} />
+              background: pipelineReady && input.trim() ? 'rgba(149,128,200,0.2)' : 'rgba(255,255,255,0.04)',
+              color:      pipelineReady && input.trim() ? '#9580c8' : 'rgba(255,255,255,0.15)',
+            }}>
+            <Send size={12} />
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Report modal
+// ---------------------------------------------------------------------------
+function ReportModal({
+  reportUrl, reportType, onClose,
+}: { reportUrl: string; reportType: 'pdf' | 'pptx'; onClose: () => void }) {
+  const fullUrl = `http://localhost:8000${reportUrl}`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-auto py-6 px-4"
+      style={{ background: 'rgba(0,0,0,0.88)' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="relative w-full flex flex-col rounded-xl overflow-hidden shadow-2xl"
+        style={{ maxWidth: 960, maxHeight: '90vh', background: '#100e24',
+          border: '1px solid rgba(149,128,200,0.18)' }}>
+        <div className="flex items-center justify-between px-4 py-3 border-b shrink-0"
+          style={{ borderColor: 'rgba(149,128,200,0.1)' }}>
+          <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: '1.5px', color: '#9580c8',
+            fontFamily: "'DM Sans', sans-serif" }}>
+            {reportType === 'pdf' ? 'one-pager report' : 'powerpoint deck'}
+          </div>
+          <div className="flex items-center gap-2">
+            <a href={fullUrl} target="_blank" rel="noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded transition-all"
+              style={{ background: 'rgba(149,128,200,0.1)', color: '#9580c8',
+                border: '1px solid rgba(149,128,200,0.22)', fontSize: 9, fontFamily: "'DM Sans', sans-serif" }}>
+              open in new tab
+            </a>
+            <button onClick={onClose} className="p-1.5 rounded transition-colors"
+              style={{ color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.1)' }}>
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+        <div className="flex flex-col items-center justify-center gap-6 py-16">
+          <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, letterSpacing: '1.5px',
+            fontFamily: "'DM Sans', sans-serif" }}>
+            {reportType === 'pdf' ? 'pdf report ready' : 'powerpoint deck ready'}
+          </div>
+          <a href={fullUrl} target="_blank" rel="noreferrer"
+            className="flex items-center gap-2 px-6 py-3 rounded-lg transition-all"
+            style={{ background: 'rgba(149,128,200,0.1)', color: '#b0a0d8',
+              border: '1px solid rgba(149,128,200,0.3)', fontSize: 13, fontWeight: 500,
+              fontFamily: "'DM Sans', sans-serif" }}>
+            <Download size={18} />
+            {reportType === 'pdf' ? 'open / download pdf' : 'download powerpoint'}
+          </a>
         </div>
       </div>
     </div>
@@ -458,67 +600,68 @@ function DashboardContent() {
 
   const storageKey = `riva-session:${rivaUrl}|${compUrl}`;
 
-  // Check sessionStorage for a saved session matching these URLs
-  const savedSession = useMemo(() => {
-    if (!rivaUrl && !compUrl) return null;
+  const sessionIdRef = useRef(crypto.randomUUID());
+
+  // All state starts at server-safe defaults (no sessionStorage on server).
+  // Saved session is applied in a useEffect after hydration to avoid mismatches.
+  const [rivaThoughts,       setRivaThoughts]       = useState<Thought[]>([]);
+  const [compThoughts,       setCompThoughts]       = useState<Thought[]>([]);
+  const [rivaFrame,          setRivaFrame]          = useState('');
+  const [compFrame,          setCompFrame]          = useState('');
+  const [rivaPaused,         setRivaPaused]         = useState(false);
+  const [compPaused,         setCompPaused]         = useState(false);
+  const [rivaComplete,       setRivaComplete]       = useState(false);
+  const [compComplete,       setCompComplete]       = useState(false);
+  const [isRestoring,        setIsRestoring]        = useState(false);
+  const [rivaWsState,        setRivaWsState]        = useState<'connecting'|'open'|'closed'>('connecting');
+  const [compWsState,        setCompWsState]        = useState<'connecting'|'open'|'closed'>('connecting');
+
+  // Apply saved session after mount (client-only)
+  useEffect(() => {
+    if (!rivaUrl && !compUrl) return;
     try {
       const raw = sessionStorage.getItem(storageKey);
-      return raw ? JSON.parse(raw) : null;
-    } catch { return null; }
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (saved.sessionId) sessionIdRef.current = saved.sessionId;
+      if (saved.rivaFrame)      setRivaFrame(saved.rivaFrame);
+      if (saved.compFrame)      setCompFrame(saved.compFrame);
+      if (saved.rivaComplete)   setRivaComplete(saved.rivaComplete);
+      if (saved.compComplete)   setCompComplete(saved.compComplete);
+      if (saved.pipelineLogs)   setPipelineLogs(saved.pipelineLogs);
+      if (saved.pipelineStatus) setPipelineStatus(saved.pipelineStatus);
+      if (saved.reportUrl)      setReportUrl(saved.reportUrl);
+      if (saved.reportType)     setReportType(saved.reportType);
+      if (saved.chatMessages)   setChatMessages(saved.chatMessages);
+      setRivaWsState('closed');
+      setCompWsState('closed');
+      setIsRestoring(true);
+    } catch { /* ignore */ }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isRestoring = !!savedSession;
-
-  // Reuse saved sessionId if restoring so backend can correlate
-  const sessionId = useMemo(
-    () => savedSession?.sessionId || crypto.randomUUID(),
-    [] // eslint-disable-line react-hooks/exhaustive-deps
-  );
-
-  // expected=0 in restore mode — backend skips agent waiting
+  const sessionId = sessionIdRef.current;
   const expected = isRestoring ? 0 : (rivaUrl ? 1 : 0) + (compUrl ? 1 : 0);
-
-  // Browser state — seed from saved session when restoring
-  const [rivaThoughts, setRivaThoughts] = useState<Thought[]>([]);
-  const [compThoughts, setCompThoughts] = useState<Thought[]>([]);
-  const [rivaFrame,    setRivaFrame]    = useState(savedSession?.rivaFrame    || '');
-  const [compFrame,    setCompFrame]    = useState(savedSession?.compFrame    || '');
-  const [rivaPaused,    setRivaPaused]    = useState(false);
-  const [compPaused,    setCompPaused]    = useState(false);
-  const [rivaComplete,  setRivaComplete]  = useState(savedSession?.rivaComplete  || false);
-  const [compComplete,  setCompComplete]  = useState(savedSession?.compComplete  || false);
-  const [rivaWsState,   setRivaWsState]   = useState<'connecting' | 'open' | 'closed'>(
-    isRestoring ? 'closed' : 'connecting'
-  );
-  const [compWsState,   setCompWsState]   = useState<'connecting' | 'open' | 'closed'>(
-    isRestoring ? 'closed' : 'connecting'
-  );
   const [rivaStuckMilestone, setRivaStuckMilestone] = useState<string | null>(null);
   const [compStuckMilestone, setCompStuckMilestone] = useState<string | null>(null);
 
-  // Pipeline state
-  const [pipelineLogs,    setPipelineLogs]    = useState<PipelineLog[]>(savedSession?.pipelineLogs    || []);
-  const [pipelineStatus,  setPipelineStatus]  = useState<'waiting' | 'vectorizing' | 'ready'>(savedSession?.pipelineStatus  || 'waiting');
-  const [pipelineWsState, setPipelineWsState] = useState<'connecting' | 'open' | 'closed'>('connecting');
+  const [pipelineLogs,    setPipelineLogs]    = useState<PipelineLog[]>([]);
+  const [pipelineStatus,  setPipelineStatus]  = useState<'waiting'|'vectorizing'|'ready'>('waiting');
 
-  // Report state
-  const [reportUrl,       setReportUrl]       = useState<string | null>(savedSession?.reportUrl  || null);
-  const [reportType,      setReportType]      = useState<'pdf' | 'pptx' | null>(savedSession?.reportType || null);
+  const [reportUrl,       setReportUrl]       = useState<string | null>(null);
+  const [reportType,      setReportType]      = useState<'pdf'|'pptx'|null>(null);
   const [reportModalOpen, setReportModalOpen] = useState(false);
 
-  // Chat state
-  const [chatOpen,     setChatOpen]     = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMsg[]>(savedSession?.chatMessages || []);
+  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
 
-  // Persist session state to sessionStorage on every meaningful change
+  const [logsExpanded,   setLogsExpanded]   = useState(false);
+  const [bottomExpanded, setBottomExpanded] = useState(false);
+
   useEffect(() => {
     if (!rivaUrl && !compUrl) return;
     try {
       sessionStorage.setItem(storageKey, JSON.stringify({
-        sessionId, rivaComplete, compComplete,
-        rivaFrame, compFrame,
-        chatMessages, pipelineLogs, pipelineStatus,
-        reportUrl, reportType,
+        sessionId, rivaComplete, compComplete, rivaFrame, compFrame,
+        chatMessages, pipelineLogs, pipelineStatus, reportUrl, reportType,
       }));
     } catch {}
   }, [sessionId, rivaComplete, compComplete, rivaFrame, compFrame,
@@ -528,133 +671,93 @@ function DashboardContent() {
   const compWsRef     = useRef<WebSocket | null>(null);
   const pipelineWsRef = useRef<WebSocket | null>(null);
 
-  // Pipeline WS (opens first)
   useEffect(() => {
     if (!sessionId || expected === 0) return;
-    const ws = new WebSocket(
-      `ws://localhost:8000/ws/pipeline?session=${sessionId}&expected=${expected}`
-    );
+    const ws = new WebSocket(`ws://localhost:8000/ws/pipeline?session=${sessionId}&expected=${expected}`);
     pipelineWsRef.current = ws;
-    ws.onopen  = () => setPipelineWsState('open');
-    ws.onclose = () => setPipelineWsState('closed');
+    ws.onopen  = () => {};
+    ws.onclose = () => {};
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'log') {
-        setPipelineLogs(p => [...p, { text: msg.text, state: msg.state, ts: now() }]);
-      } else if (msg.type === 'chat') {
-        setChatMessages(p => [...p, { role: 'assistant', text: msg.text, ts: now() }]);
-        setChatOpen(true); // auto-open drawer when assistant speaks
-      } else if (msg.type === 'status') {
-        setPipelineStatus(msg.value);
-      } else if (msg.type === 'report_ready') {
-        setReportUrl(msg.url);
-        setReportType(msg.report_type);
-      }
+      if (msg.type === 'log')           setPipelineLogs(p => [...p, { text: msg.text, state: msg.state, ts: now() }]);
+      else if (msg.type === 'chat')     setChatMessages(p => [...p, { role: 'assistant', text: msg.text, ts: now() }]);
+      else if (msg.type === 'status')   setPipelineStatus(msg.value);
+      else if (msg.type === 'report_ready') { setReportUrl(msg.url); setReportType(msg.report_type); }
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  // Riva browse WS — skip if restoring a saved session
   useEffect(() => {
     if (isRestoring || !rivaUrl) { setRivaWsState('closed'); return; }
-    const ws = new WebSocket(
-      `ws://localhost:8000/ws/browse?session=${sessionId}&role=riva`
-    );
+    const ws = new WebSocket(`ws://localhost:8000/ws/browse?session=${sessionId}&role=riva`);
     rivaWsRef.current = ws;
     ws.onopen    = () => { setRivaWsState('open'); ws.send(JSON.stringify({ url: rivaUrl })); };
     ws.onclose   = () => setRivaWsState('closed');
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'frame') {
-        setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
-      } else if (msg.type === 'thought') {
-        setRivaThoughts(p => [...p, { ...msg, ts: now() }]);
-      } else if (msg.type === 'auto_pause') {
-        setRivaPaused(true);
-      } else if (msg.type === 'stuck_guidance') {
-        setRivaStuckMilestone(msg.milestone);
-      } else if (msg.type === 'browse_complete') {
-        setRivaComplete(true);
-        setRivaStuckMilestone(null);
-      }
+      if (msg.type === 'frame')               setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
+      else if (msg.type === 'thought')        setRivaThoughts(p => [...p, { ...msg, ts: now() }]);
+      else if (msg.type === 'auto_pause')     setRivaPaused(true);
+      else if (msg.type === 'stuck_guidance') setRivaStuckMilestone(msg.milestone);
+      else if (msg.type === 'browse_complete') { setRivaComplete(true); setRivaStuckMilestone(null); }
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rivaUrl]);
 
-  // Competitor browse WS — skip if restoring a saved session
   useEffect(() => {
     if (isRestoring || !compUrl) { setCompWsState('closed'); return; }
-    const ws = new WebSocket(
-      `ws://localhost:8000/ws/browse?session=${sessionId}&role=comp`
-    );
+    const ws = new WebSocket(`ws://localhost:8000/ws/browse?session=${sessionId}&role=comp`);
     compWsRef.current = ws;
     ws.onopen    = () => { setCompWsState('open'); ws.send(JSON.stringify({ url: compUrl })); };
     ws.onclose   = () => setCompWsState('closed');
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'frame') {
-        setCompFrame(`data:image/jpeg;base64,${msg.data}`);
-      } else if (msg.type === 'thought') {
-        setCompThoughts(p => [...p, { ...msg, ts: now() }]);
-      } else if (msg.type === 'auto_pause') {
-        setCompPaused(true);
-      } else if (msg.type === 'stuck_guidance') {
-        setCompStuckMilestone(msg.milestone);
-      } else if (msg.type === 'browse_complete') {
-        setCompComplete(true);
-        setCompStuckMilestone(null);
-      }
+      if (msg.type === 'frame')               setCompFrame(`data:image/jpeg;base64,${msg.data}`);
+      else if (msg.type === 'thought')        setCompThoughts(p => [...p, { ...msg, ts: now() }]);
+      else if (msg.type === 'auto_pause')     setCompPaused(true);
+      else if (msg.type === 'stuck_guidance') setCompStuckMilestone(msg.milestone);
+      else if (msg.type === 'browse_complete') { setCompComplete(true); setCompStuckMilestone(null); }
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compUrl]);
 
   function sendToWs(wsRef: React.RefObject<WebSocket | null>, msg: object) {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(msg));
-    }
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(msg));
   }
 
   function togglePause(side: 'riva' | 'comp') {
     if (side === 'riva') {
-      const next = !rivaPaused;
-      setRivaPaused(next);
+      const next = !rivaPaused; setRivaPaused(next);
       sendToWs(rivaWsRef, { type: next ? 'pause' : 'resume' });
     } else {
-      const next = !compPaused;
-      setCompPaused(next);
+      const next = !compPaused; setCompPaused(next);
       sendToWs(compWsRef, { type: next ? 'pause' : 'resume' });
     }
   }
 
   function restartBrowse(url: string, side: 'riva' | 'comp') {
-    const wsRef      = side === 'riva' ? rivaWsRef      : compWsRef;
-    const setWsState = side === 'riva' ? setRivaWsState : setCompWsState;
+    const wsRef       = side === 'riva' ? rivaWsRef       : compWsRef;
+    const setWsState  = side === 'riva' ? setRivaWsState  : setCompWsState;
     const setThoughts = side === 'riva' ? setRivaThoughts : setCompThoughts;
-    const setFrame   = side === 'riva' ? setRivaFrame   : setCompFrame;
-    const setPaused  = side === 'riva' ? setRivaPaused  : setCompPaused;
+    const setFrame    = side === 'riva' ? setRivaFrame    : setCompFrame;
+    const setPaused   = side === 'riva' ? setRivaPaused   : setCompPaused;
     const setComplete = side === 'riva' ? setRivaComplete : setCompComplete;
 
     wsRef.current?.close();
-    setComplete(false);
-    setPaused(false);
-    setThoughts([]);
-    setFrame('');
+    setComplete(false); setPaused(false); setThoughts([]); setFrame('');
 
-    const ws = new WebSocket(
-      `ws://localhost:8000/ws/browse?session=${sessionId}&role=${side}`
-    );
+    const ws = new WebSocket(`ws://localhost:8000/ws/browse?session=${sessionId}&role=${side}`);
     wsRef.current = ws;
     setWsState('connecting');
-
     ws.onopen  = () => { setWsState('open'); ws.send(JSON.stringify({ url })); };
     ws.onclose = () => setWsState('closed');
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'frame')          setFrame(`data:image/jpeg;base64,${msg.data}`);
-      else if (msg.type === 'thought')   setThoughts(p => [...p, { ...msg, ts: now() }]);
+      if (msg.type === 'frame')           setFrame(`data:image/jpeg;base64,${msg.data}`);
+      else if (msg.type === 'thought')    setThoughts(p => [...p, { ...msg, ts: now() }]);
       else if (msg.type === 'auto_pause') setPaused(true);
       else if (msg.type === 'browse_complete') setComplete(true);
     };
@@ -667,134 +770,144 @@ function DashboardContent() {
 
   const pipelineReady = pipelineStatus === 'ready';
 
+  function hostname(url: string) {
+    try { return new URL(url).hostname; } catch { return url; }
+  }
+
+  const RIVA_COLOR = 'rgba(77,184,255,0.55)';
+  const COMP_COLOR = 'rgba(255,107,107,0.55)';
+
   return (
-    <div className="h-screen flex flex-col bg-[#050a15] text-white overflow-hidden">
-      {/* Header */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-white/5 bg-[#030810] shrink-0">
-        <button onClick={() => router.push('/')} className="flex items-center gap-3">
-          <Shield size={20} className="text-[#00ffff]" />
-          <span className="font-bold tracking-[8px] text-lg uppercase">RIVA</span>
-        </button>
-        <div className="flex items-center gap-4 text-[10px] font-mono">
-          {rivaUrl && <span className="text-[#00ffff]/40 truncate max-w-[200px]">{rivaUrl}</span>}
-          {rivaUrl && compUrl && <span className="text-white/20">vs</span>}
-          {compUrl && <span className="text-[#ff3333]/40 truncate max-w-[200px]">{compUrl}</span>}
-          {isRestoring && (
-            <span className="px-2 py-0.5 rounded text-[8px] font-bold tracking-widest"
-              style={{ background: 'rgba(0,204,204,0.1)', color: '#00cccc', border: '1px solid #00cccc33' }}>
-              RESTORED
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-4 text-[10px] font-bold">
-          {rivaUrl && (
-            <div className="flex items-center gap-1.5">
-              <div className={`w-2 h-2 rounded-full ${rivaWsState === 'open' ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'}`} />
-              <span className="text-white/30">RIVA</span>
-            </div>
-          )}
-          {compUrl && (
-            <div className="flex items-center gap-1.5">
-              <div className={`w-2 h-2 rounded-full ${compWsState === 'open' ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'}`} />
-              <span className="text-white/30">COMP</span>
-            </div>
-          )}
-          <div className="flex items-center gap-1.5">
-            <div className={`w-2 h-2 rounded-full ${pipelineWsState === 'open' ? 'bg-cyan-500 shadow-[0_0_8px_#06b6d4]' : 'bg-white/10'}`} />
-            <span className="text-white/30">PIPELINE</span>
-          </div>
-          {isRestoring && (
-            <button
-              onClick={() => { try { sessionStorage.removeItem(storageKey); } catch {} window.location.reload(); }}
-              className="px-2 py-1 rounded text-[8px] font-bold tracking-widest transition-all"
-              style={{ background: 'rgba(255,51,51,0.1)', color: '#ff3333', border: '1px solid #ff333333' }}
-            >
-              NEW SESSION
+    <>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" />
+      <div className="h-screen flex flex-col overflow-hidden text-white"
+        style={{ background: 'linear-gradient(135deg, #0e0d2b 0%, #1a1040 40%, #0d0820 100%)',
+          fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+
+        {/* ── Navbar ── */}
+        <div className="flex justify-center px-6 pt-4 pb-2 shrink-0">
+          <header className="flex items-center justify-between px-5 py-2.5 rounded-full w-full"
+            style={{
+              maxWidth: '80rem',
+              background: 'rgba(255,255,255,0.06)',
+              backdropFilter: 'blur(20px)',
+              WebkitBackdropFilter: 'blur(20px)',
+              border: '1px solid rgba(255,255,255,0.12)',
+              boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
+            }}>
+            <button onClick={() => router.push('/')} className="flex items-center gap-2.5">
+              <svg viewBox="0 0 40 24" style={{ width: 26, overflow: 'visible' }}>
+                <defs><clipPath id="nav-eye-clip"><path d="M1,12 Q20,-4 39,12 Q20,28 1,12" /></clipPath></defs>
+                <g clipPath="url(#nav-eye-clip)">
+                  <path d="M1,12 Q20,-4 39,12 Q20,28 1,12" fill="#e0f7fa" />
+                  <circle cx="20" cy="12" r="6" fill="#002233" />
+                  <circle cx="20" cy="12" r="3" fill="#00ffff" style={{ filter: 'drop-shadow(0 0 4px #00ffff)' }} />
+                </g>
+              </svg>
+              <span style={{ fontWeight: 600, letterSpacing: '6px', fontSize: 14,
+                textTransform: 'uppercase', color: '#ffffff' }}>RIVA</span>
             </button>
-          )}
-        </div>
-      </header>
 
-      {/* Main content */}
-      <div className="flex-1 flex flex-col min-h-0">
-
-        {/* Browsers row */}
-        <div className="flex-1 flex min-h-0">
-          {rivaUrl && (
-            <div className="flex flex-col flex-1 border-r border-white/5 min-w-0">
-              <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] bg-cyan-500/5 text-[#00ffff] border-b border-white/5 shrink-0">
-                ◈ YOUR SITE
-              </div>
-              <ThoughtLog thoughts={rivaThoughts} label="RIVA" color="#00ffff" />
-              <BrowserPanel
-                label="RIVA" color="#00ffff" frameSrc={rivaFrame} active
-                isPaused={rivaPaused} isComplete={rivaComplete}
-                wsActive={rivaWsState === 'open'}
-                stuckMilestone={rivaStuckMilestone}
-                onTogglePause={() => togglePause('riva')}
-                onInteraction={(t: string, x: number, y: number) =>
-                  sendToWs(rivaWsRef, { type: t, x, y })}
-                onGoto={(url: string) => {
-                  setRivaStuckMilestone(null);
-                  sendToWs(rivaWsRef, { type: 'goto', url });
-                }}
-                onRestart={(url: string) => restartBrowse(url, 'riva')}
-              />
+            <div className="flex items-center gap-3" style={{ fontSize: 10, fontFamily: "'Fira Code', monospace" }}>
+              {rivaUrl && <span style={{ color: 'rgba(77,184,255,0.7)' }} className="truncate max-w-[160px]">{hostname(rivaUrl)}</span>}
+              {rivaUrl && compUrl && <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11 }}>vs</span>}
+              {compUrl && <span style={{ color: 'rgba(255,107,107,0.7)' }} className="truncate max-w-[160px]">{hostname(compUrl)}</span>}
             </div>
-          )}
 
-          {compUrl && (
-            <div className="flex flex-col flex-1 bg-black/20 min-w-0">
-              <div className="px-4 py-2 text-[10px] font-bold tracking-[4px] bg-red-500/5 text-[#ff3333] border-b border-white/5 shrink-0">
-                ◈ COMPETITOR
-              </div>
-              <ThoughtLog thoughts={compThoughts} label="COMP" color="#ff3333" />
-              <BrowserPanel
-                label="COMP" color="#ff3333" frameSrc={compFrame} active
-                isPaused={compPaused} isComplete={compComplete}
-                wsActive={compWsState === 'open'}
-                stuckMilestone={compStuckMilestone}
-                onTogglePause={() => togglePause('comp')}
-                onInteraction={(t: string, x: number, y: number) =>
-                  sendToWs(compWsRef, { type: t, x, y })}
-                onGoto={(url: string) => {
-                  setCompStuckMilestone(null);
-                  sendToWs(compWsRef, { type: 'goto', url });
-                }}
-                onRestart={(url: string) => restartBrowse(url, 'comp')}
-              />
-            </div>
-          )}
+            <button
+              onClick={() => { try { sessionStorage.removeItem(storageKey); } catch {} router.push('/'); }}
+              className="flex items-center gap-2 px-4 py-1.5 rounded-full transition-all"
+              style={{ background: 'rgba(212,96,96,0.08)', color: '#e87070',
+                border: '1px solid rgba(212,96,96,0.35)', fontSize: 10, fontWeight: 500, letterSpacing: '1.5px' }}>
+              End Session
+            </button>
+          </header>
         </div>
 
-        {/* Pipeline log */}
-        <PipelineLogPanel
-          logs={pipelineLogs}
-          status={pipelineStatus}
-          reportReady={!!reportUrl}
-          onOpenChat={() => setChatOpen(true)}
-          onViewReport={() => setReportModalOpen(true)}
-        />
+        {/* ── Main ── */}
+        <div className="flex-1 flex flex-col min-h-0 px-3">
+          <div className="flex-1 flex flex-col min-h-0">
+
+            {/* Mini logs row */}
+            {(rivaUrl || compUrl) && (
+              <div className="flex gap-2 shrink-0 pt-2 pb-1.5">
+                {rivaUrl && (
+                  <div className="flex-1 min-w-0 rounded-lg overflow-hidden"
+                    style={{ border: `1.5px solid ${RIVA_COLOR}` }}>
+                    <MiniLog thoughts={rivaThoughts} color="#4db8ff" accentColor="#4db8ff"
+                      domain={hostname(rivaUrl)}
+                      eyeBgFill="#e0f7fa" eyeDarkFill="#001a2e" eyeLidFill="#1a0d40"
+                      glowId="mini-log-riva" expanded={logsExpanded}
+                      onToggle={() => setLogsExpanded(v => !v)} />
+                  </div>
+                )}
+                {compUrl && (
+                  <div className="flex-1 min-w-0 rounded-lg overflow-hidden"
+                    style={{ border: `1.5px solid ${COMP_COLOR}` }}>
+                    <MiniLog thoughts={compThoughts} color="#ff6b6b" accentColor="#ff6b6b"
+                      domain={hostname(compUrl)}
+                      eyeBgFill="#fbe9e7" eyeDarkFill="#1e0000" eyeLidFill="#200a1a"
+                      glowId="mini-log-comp" expanded={logsExpanded}
+                      onToggle={() => setLogsExpanded(v => !v)} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Browser panels */}
+            <div className="flex-1 flex min-h-0 gap-2 pb-2">
+              {rivaUrl && (
+                <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
+                  style={{ border: `1.5px solid ${RIVA_COLOR}` }}>
+                  <BrowserPanel label="riva" frameSrc={rivaFrame} active
+                    isPaused={rivaPaused} isComplete={rivaComplete} wsActive={rivaWsState === 'open'}
+                    stuckMilestone={rivaStuckMilestone}
+                    onTogglePause={() => togglePause('riva')}
+                    onInteraction={(t: string, x: number, y: number) => sendToWs(rivaWsRef, { type: t, x, y })}
+                    onGoto={(url: string) => { setRivaStuckMilestone(null); sendToWs(rivaWsRef, { type: 'goto', url }); }}
+                    onRestart={(url: string) => restartBrowse(url, 'riva')} />
+                </div>
+              )}
+              {compUrl && (
+                <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
+                  style={{ border: `1.5px solid ${COMP_COLOR}` }}>
+                  <BrowserPanel label="comp" frameSrc={compFrame} active
+                    isPaused={compPaused} isComplete={compComplete} wsActive={compWsState === 'open'}
+                    stuckMilestone={compStuckMilestone}
+                    onTogglePause={() => togglePause('comp')}
+                    onInteraction={(t: string, x: number, y: number) => sendToWs(compWsRef, { type: t, x, y })}
+                    onGoto={(url: string) => { setCompStuckMilestone(null); sendToWs(compWsRef, { type: 'goto', url }); }}
+                    onRestart={(url: string) => restartBrowse(url, 'comp')} />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Bottom: inference logs + chat ── */}
+          <div className="flex shrink-0 rounded-lg overflow-hidden mb-3"
+            style={{
+              height: bottomExpanded ? 400 : 220,
+              transition: 'height 0.25s ease',
+              border: '1px solid rgba(255,255,255,0.1)',
+            }}>
+            <div className="flex-1 min-w-0">
+              <InferenceLogPanel logs={pipelineLogs} status={pipelineStatus}
+                reportReady={!!reportUrl} onViewReport={() => setReportModalOpen(true)}
+                bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <InlineChatPanel messages={chatMessages} onSend={sendChat}
+                pipelineReady={pipelineReady} pipelineStatus={pipelineStatus}
+                bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
+            </div>
+          </div>
+        </div>
+
+        {reportModalOpen && reportUrl && reportType && (
+          <ReportModal reportUrl={reportUrl} reportType={reportType as 'pdf'|'pptx'}
+            onClose={() => setReportModalOpen(false)} />
+        )}
       </div>
-
-      {/* Chat drawer */}
-      {chatOpen && (
-        <ChatDrawer
-          messages={chatMessages}
-          onSend={sendChat}
-          onClose={() => setChatOpen(false)}
-          pipelineReady={pipelineReady}
-        />
-      )}
-
-      {/* Report modal */}
-      {reportModalOpen && reportUrl && reportType && (
-        <ReportModal
-          reportUrl={reportUrl}
-          reportType={reportType as 'pdf' | 'pptx'}
-          onClose={() => setReportModalOpen(false)}
-        />
-      )}
-    </div>
+    </>
   );
 }

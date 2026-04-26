@@ -161,7 +161,7 @@ def _process_file_pipeline(filepath: Path, log_fn=None, cache: set = None) -> in
 
     url = meta.get("url", "")
 
-    # URL-based cache — skip if this URL was already vectorized in a previous run
+    # URL-based cache — same URL is never re-vectorized even if content changed slightly
     if cache is not None and url and url in cache:
         if log_fn:
             log_fn(f"  (already vectorized, skipping)", "info")
@@ -223,21 +223,27 @@ def _embed_query(text: str) -> list[float]:
     raise RuntimeError("_embed_query failed after 4 retries.")
 
 
-def _rag_search(vector: list[float], top_k: int = 15) -> list[dict]:
+def _rag_search(vector: list[float], top_k: int = 15, domains: list[str] | None = None) -> list[dict]:
     url  = (
         f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
         f"/vectorize/v2/indexes/{CF_INDEX_NAME}/query"
     )
+    # Fetch extra candidates for client-side domain filtering, capped at Vectorize v2 max of 20
+    fetch_k = min(20, top_k * 4) if domains else top_k
     resp = requests.post(
         url, headers=CF_HEADERS,
-        json={"vector": vector, "topK": top_k, "returnMetadata": "all"},
+        json={"vector": vector, "topK": fetch_k, "returnMetadata": "all"},
         timeout=20,
     )
     resp.raise_for_status()
     data = resp.json()
     if not data.get("success"):
         raise RuntimeError(f"Query failed: {data}")
-    return data["result"].get("matches", [])
+    matches = data["result"].get("matches", [])
+    if domains:
+        domain_set = set(domains)
+        matches = [m for m in matches if m.get("metadata", {}).get("domain") in domain_set]
+    return matches[:top_k]
 
 
 def _build_rag_context(matches: list[dict]) -> str:
@@ -1513,7 +1519,7 @@ async def pipeline_websocket(
                 try:
                     log(f"RAG query: \"{user_text[:60]}\"", "info")
                     vec     = _embed_query(user_text)
-                    matches = _rag_search(vec, top_k=15)
+                    matches = _rag_search(vec, top_k=15, domains=all_domains)
                     if matches:
                         domains_hit = list({
                             m.get("metadata", {}).get("domain") for m in matches
