@@ -58,7 +58,7 @@ except ImportError as _import_err:
     _REPORTS_AVAILABLE = False
     print(f"Warning: report modules not available: {_import_err}")
 
-# Vectorize helpers (inlined from testing/vectorize.py)
+# Vectorize pipeline helpers
 _CHUNK_SIZE    = 400
 _CHUNK_OVERLAP = 60
 _EMBED_BATCH   = 50
@@ -118,7 +118,7 @@ def _vector_id(domain: str, intel_type: str, url: str, idx: int) -> str:
 
 
 def _load_vec_cache(domain_dir: Path) -> set:
-    """Load set of URLs already vectorized for this domain."""
+    """Load the set of URLs already vectorized for this domain."""
     cache_path = domain_dir / ".vectorized_cache.json"
     if cache_path.exists():
         try:
@@ -137,8 +137,8 @@ def _save_vec_cache(domain_dir: Path, cache: set):
 
 
 def _process_file_pipeline(filepath: Path, log_fn=None, cache: set = None) -> int:
-    """Chunk → embed → upsert a single extract file. Returns vector count, or -1 if skipped.
-    Cache is keyed by URL — same URL is never re-vectorized even if content changed slightly."""
+    """Chunk, embed, and upsert a single extract file. Returns the number of vectors upserted,
+    or -1 if the URL was already in the cache and skipped."""
     try:
         raw = filepath.read_text(encoding="utf-8")
     except Exception as e:
@@ -161,7 +161,6 @@ def _process_file_pipeline(filepath: Path, log_fn=None, cache: set = None) -> in
 
     url = meta.get("url", "")
 
-    # URL-based cache — same URL is never re-vectorized even if content changed slightly
     if cache is not None and url and url in cache:
         if log_fn:
             log_fn(f"  (already vectorized, skipping)", "info")
@@ -201,14 +200,13 @@ def _process_file_pipeline(filepath: Path, log_fn=None, cache: set = None) -> in
             if log_fn:
                 log_fn(f"Embed error ({filepath.name}): {e}", "error")
 
-    # Add URL to cache on success so future runs skip it
     if total > 0 and cache is not None and url:
         cache.add(url)
 
     return total
 
 
-# RAG helpers (inlined from testing/query.py)
+# RAG helpers
 def _embed_query(text: str) -> list[float]:
     url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_EMBED_MODEL}"
     for attempt in range(4):
@@ -228,7 +226,8 @@ def _rag_search(vector: list[float], top_k: int = 15, domains: list[str] | None 
         f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
         f"/vectorize/v2/indexes/{CF_INDEX_NAME}/query"
     )
-    # Fetch extra candidates for client-side domain filtering, capped at Vectorize v2 max of 20
+    # Fetch more candidates than needed so we can filter by domain client-side.
+    # Vectorize v2 has a hard cap of 20 results.
     fetch_k = min(20, top_k * 4) if domains else top_k
     resp = requests.post(
         url, headers=CF_HEADERS,
@@ -273,13 +272,14 @@ def _rag_answer(question: str, context: str) -> str:
     ).text.strip()
 
 
-# Session registry — coordinates browse agents with the pipeline WS
+# Session registry — one _Session per pipeline WS connection.
+# Coordinates the two browse agents with the vectorization pipeline.
 class _Session:
     def __init__(self, expected: int):
         self.expected   = expected
         self.completed  = 0
         self.domains:   list[str] = []
-        self.ready_q    = tqueue.Queue()   # domains ready for vectorization (one per agent)
+        self.ready_q    = tqueue.Queue()   # domains ready for vectorization
         self.done_event = threading.Event()
         self._lock      = threading.Lock()
 
@@ -288,7 +288,7 @@ class _Session:
             self.completed += 1
             if domain and domain not in self.domains:
                 self.domains.append(domain)
-                self.ready_q.put(domain)   # immediately signal vectorize pipeline
+                self.ready_q.put(domain)
             if self.completed >= self.expected:
                 self.done_event.set()
 
@@ -296,9 +296,9 @@ class _Session:
 _sessions: dict[str, _Session] = {}
 
 
-# Chrome CDP helpers
+# Chrome CDP helpers — used as a fallback when Playwright's automation flags trigger bot protection
 def _launch_bare_chrome(target_url: str, debug_port: int, user_data_dir: str):
-    """Launch Chrome without Playwright automation flags (bypasses Turnstile detection)."""
+    """Launch Chrome with no automation flags. Used to bypass Cloudflare Turnstile."""
     chrome_exe = shutil.which("chrome") or shutil.which("google-chrome")
     if not chrome_exe:
         for path in [
@@ -322,7 +322,7 @@ def _launch_bare_chrome(target_url: str, debug_port: int, user_data_dir: str):
 
 
 def _wait_for_debug_port(port: int, timeout: int = 15) -> bool:
-    """Wait until Chrome's remote debugging port is accepting connections."""
+    """Block until Chrome's remote debugging port is ready, or until timeout."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -333,9 +333,8 @@ def _wait_for_debug_port(port: int, timeout: int = 15) -> bool:
     return False
 
 
-# Extract saver
 def save_extract(domain: str, intel_type: str, url: str, content: str) -> str:
-    """Write extracted page content to testing/extracts/{domain}/{type}_{ts}.txt."""
+    """Save extracted page content to testing/extracts/{domain}/{type}.txt."""
     folder = EXTRACTS_DIR / domain
     folder.mkdir(parents=True, exist_ok=True)
     slug = re.sub(r'[^a-zA-Z0-9_-]', '_', urlparse(url).path.strip('/'))[:60] or 'index'
@@ -350,7 +349,6 @@ def save_extract(domain: str, intel_type: str, url: str, content: str) -> str:
     return str(filepath)
 
 
-# Database
 DB_PATH  = os.path.join(os.path.dirname(__file__), "riva_intel.db")
 _db_lock = threading.Lock()
 
@@ -387,7 +385,6 @@ def init_db():
 
 init_db()
 
-# App
 app = FastAPI(title="Riva Strategic Pathfinder")
 app.add_middleware(
     CORSMiddleware,
@@ -396,7 +393,6 @@ app.add_middleware(
 )
 
 
-# REST
 @app.get("/sessions")
 def list_sessions():
     with _db_lock, _db() as conn:
@@ -421,10 +417,9 @@ def get_session(session_id: str):
 
 @app.get("/check-vectorized")
 def check_vectorized(domain: str = ""):
-    """Return whether a domain already has extracted/vectorized data."""
+    """Check whether a domain has cached extract data. Used to enable the skip button."""
     if not domain:
         return {"vectorized": False}
-    # Strip www. to match the normalized domain used during extraction
     domain = re.sub(r'^www\.', '', domain.lower().strip())
     domain_dir = EXTRACTS_DIR / domain
     if domain_dir.exists() and list(domain_dir.glob("*.txt")):
@@ -434,8 +429,7 @@ def check_vectorized(domain: str = ""):
 
 @app.get("/reports/{filename}")
 def serve_report(filename: str):
-    """Serve generated HTML/PPTX report files."""
-    # Basic path traversal guard
+    """Serve a generated report file by name."""
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
     path = REPORTS_DIR / filename
@@ -444,7 +438,6 @@ def serve_report(filename: str):
     return FileResponse(str(path))
 
 
-# Browse WebSocket
 @app.websocket("/ws/browse")
 async def browse_websocket(
     websocket: WebSocket,
@@ -673,7 +666,7 @@ async def browse_websocket(
                 thought(f"Docs crawl complete — {count} pages saved.", "found")
                 return count
 
-            # Mutable flag: when True, a goto from the user auto-resumes the agent
+            # When True, a manual goto from the user will auto-resume the agent
             _stuck_pause = [False]
 
             def handle_gestures(page):
@@ -705,12 +698,11 @@ async def browse_websocket(
                     except Exception as e:
                         print(f"Gesture error: {e}")
 
-            # Normalize to root domain (strip www.)
             finishing_domain = re.sub(
                 r'^www\.', '', urlparse(target_url).hostname or "unknown"
             )
 
-            # Persistent profile per role — Cloudflare builds trust from cookies/history
+            # Persistent Chrome profile per role — helps build cookie trust with Cloudflare
             profile_dir = Path(__file__).parent / ".browser_profiles" / (role or "default")
             profile_dir.mkdir(parents=True, exist_ok=True)
 
@@ -725,7 +717,7 @@ async def browse_websocket(
                 "Chrome/124.0.0.0 Safari/537.36"
             )
 
-            _chrome_proc = None  # bare Chrome subprocess for CDP fallback
+            _chrome_proc = None
             try:
                 with sync_playwright() as p:
                     for _attempt in range(2):
@@ -790,8 +782,6 @@ async def browse_websocket(
 
                         page = ctx.pages[0] if ctx.pages else ctx.new_page()
 
-                        # Pre-create the extract folder for this domain so it exists
-                        # from the moment the browser opens, not on first save
                         _domain_dir = EXTRACTS_DIR / finishing_domain
                         _folder_existed = _domain_dir.exists()
                         _domain_dir.mkdir(parents=True, exist_ok=True)
@@ -801,7 +791,6 @@ async def browse_websocket(
                         else:
                             thought(f"Extract folder created: extracts/{finishing_domain}/", "info")
 
-                        # Apply stealth patches if available
                         try:
                             from playwright_stealth import stealth_sync
                             stealth_sync(page)
@@ -829,7 +818,6 @@ async def browse_websocket(
                         })
 
                         thought(f"Mission started: {target_url}", "navigating")
-                        # On CDP attempt, Chrome already opened target_url; only navigate if needed
                         if _attempt == 0 or page.url.rstrip("/") != target_url.rstrip("/"):
                             page.goto(target_url, wait_until="domcontentloaded")
                         visited_urls.append(target_url)
@@ -852,8 +840,6 @@ async def browse_websocket(
                             if stop_event.is_set():
                                 break
 
-                            # After resuming from a pause (e.g. challenge solved),
-                            # wait for the page to fully settle before the agent acts
                             if was_paused:
                                 thought("Resumed — waiting for page to settle...", "info")
                                 page.wait_for_load_state("domcontentloaded")
@@ -1072,7 +1058,6 @@ async def browse_websocket(
 
                             page.wait_for_timeout(500)
 
-                        # Close this attempt's browser before retrying (or on success)
                         try:
                             ctx.close()
                         except Exception:
@@ -1084,23 +1069,19 @@ async def browse_websocket(
                                 pass
 
                         if _retry_with_cdp:
-                            # Pause event may be set from previous run; ensure agent starts fresh
                             pause_event.set()
                             continue  # go to attempt 1
 
-                        # Normal successful finish
                         finish_session("complete")
                         thought("Scraping complete — returning to homepage.", "complete")
                         thought_q.put({"type": "browse_complete"})
 
-                        # Signal pipeline — triggers immediate vectorization for this domain
                         if session and session in _sessions:
                             _sessions[session].mark_complete(finishing_domain)
 
-                        # Close WS stream
                         thought("Closing browser window.", "info")
                         stop_event.set()
-                        break  # don't retry
+                        break
 
             except Exception as e:
                 thought(f"Fatal error: {e}", "error")
@@ -1119,15 +1100,11 @@ async def browse_websocket(
         thread = threading.Thread(target=run_browser, daemon=True)
         thread.start()
 
-        # -------------------------------------------------------------------
-        # Async handlers
-        # -------------------------------------------------------------------
         async def drain():
             while True:
                 while not thought_q.empty():
                     msg = thought_q.get_nowait()
                     if msg.get("__sentinel__"):
-                        # Flush any remaining frames then close the WS so receive() exits
                         while not frame_q.empty():
                             try:
                                 await websocket.send_text(
@@ -1187,7 +1164,6 @@ async def browse_websocket(
         stop_event.set()
 
 
-# HTML → PDF converter (uses Playwright headless Chromium)
 def _html_to_pdf(html_path: Path, log_fn=None) -> Path:
     from playwright.sync_api import sync_playwright
     pdf_path = html_path.with_suffix(".pdf")
@@ -1214,7 +1190,6 @@ def _html_to_pdf(html_path: Path, log_fn=None) -> Path:
     return pdf_path
 
 
-# Pipeline WebSocket — vectorize → chat → report generation
 @app.websocket("/ws/pipeline")
 async def pipeline_websocket(
     websocket: WebSocket,
@@ -1223,7 +1198,6 @@ async def pipeline_websocket(
 ):
     await websocket.accept()
 
-    # Always create fresh session so expected count is accurate
     _sessions[session] = _Session(expected)
     sess = _sessions[session]
 
@@ -1241,7 +1215,7 @@ async def pipeline_websocket(
         vectorized: set[str] = set()
 
         def _vectorize_domain(domain: str):
-            """Vectorize all extract files for a domain, updating vectorized set."""
+            """Vectorize all extract files for a domain."""
             if not CF_ACCOUNT_ID or not CF_API_TOKEN:
                 log("Cloudflare credentials missing — skipping vectorization.", "error")
                 vectorized.add(domain)
@@ -1285,7 +1259,7 @@ async def pipeline_websocket(
             vectorized.add(domain)
 
         if expected == 0:
-            # Restore mode — data already in Vectorize, just discover existing domains
+            # Restore mode — skip vectorization and just rediscover existing domains
             log("Restoring session — checking existing extract data...", "info")
             if EXTRACTS_DIR.exists():
                 for d_path in sorted(EXTRACTS_DIR.iterdir()):
@@ -1439,7 +1413,7 @@ async def pipeline_websocket(
                 out_path = REPORTS_DIR / f"riva_deck_{names}_{ts}.pptx"
                 prs_obj.save(str(out_path))
                 log(f"Deck saved: {out_path.name} ({len(prs_obj.slides)} slides)", "success")
-                preview_url_val = f"/reports/{out_path.name}"  # fallback: download link
+                preview_url_val = f"/reports/{out_path.name}"
                 try:
                     preview_path = REPORTS_DIR / f"riva_deck_{names}_{ts}_preview.html"
                     preview_html = render_preview_html(intel, gtm, images, theme)
@@ -1460,7 +1434,7 @@ async def pipeline_websocket(
                 bot(f"Deck generation failed: {e}")
 
         _GENERAL_WORDS = {"general", "none", "no", "all", "everything", "full", "overview", "skip"}
-        pending_report: str | None = None  # 'html' or 'pptx' — waiting for focus reply
+        pending_report: str | None = None
 
         while not stop_evt.is_set():
             try:
@@ -1470,9 +1444,7 @@ async def pipeline_websocket(
 
             text_lower = user_text.lower().strip()
 
-            # --- Pending focus reply ---
             if pending_report:
-                # Any message now is treated as the focus (or "general" to skip)
                 if text_lower in _GENERAL_WORDS:
                     focus = None
                 else:
@@ -1488,8 +1460,6 @@ async def pipeline_websocket(
                     _gen_pptx(focus)
                 continue
 
-            # Extract inline focus from any text after the report keyword.
-            # Priority: "focus on X" / "about X" patterns first, then any remaining text.
             focus = None
             focus_match = re.search(r'\bfocus(?:ed)?\s+(?:on\s+)?(.+)', text_lower)
             if focus_match:
@@ -1501,7 +1471,6 @@ async def pipeline_websocket(
                 )
                 if about_match:
                     focus = about_match.group(1).strip().rstrip(".,!?")
-            # Fallback: strip the report keyword(s) — any meaningful remaining text is the focus
             if not focus:
                 remaining = re.sub(
                     r'\*{0,2}\b(html|pptx?|powerpoint|report|deck|slides?|one.?pager|presentation)\b\*{0,2}',
@@ -1515,7 +1484,6 @@ async def pipeline_websocket(
             is_pptx = any(w in text_lower for w in
                           ["pptx", "ppt", "powerpoint", "deck", "slides", "presentation"])
 
-            # --- HTML report ---
             if is_html:
                 if not _REPORTS_AVAILABLE:
                     bot("Report modules unavailable — check server import errors.")
@@ -1530,7 +1498,6 @@ async def pipeline_websocket(
                         "*enterprise use cases* — or type **general** for a full overview."
                     )
 
-            # --- PowerPoint deck ---
             elif is_pptx:
                 if not _REPORTS_AVAILABLE:
                     bot("Report modules unavailable — check server import errors.")
@@ -1545,7 +1512,6 @@ async def pipeline_websocket(
                         "*enterprise pitch* — or type **general** for a full overview."
                     )
 
-            # --- RAG query ---
             else:
                 if not CF_ACCOUNT_ID or not CF_API_TOKEN:
                     bot("Cloudflare credentials missing — can't query the knowledge base.")
