@@ -27,10 +27,11 @@ from google import genai
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-CF_ACCOUNT_ID  = os.getenv("CLOUDFLARE_ACCOUNT_ID")
-CF_API_TOKEN   = os.getenv("CLOUDFLARE_API_TOKEN")
-CF_INDEX_NAME  = "riva-intel"
+GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY")
+CF_ACCOUNT_ID    = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+CF_API_TOKEN     = os.getenv("CLOUDFLARE_API_TOKEN")
+CF_INDEX_NAME    = "riva-intel"
+RIVA_WORKER_URL  = os.getenv("RIVA_WORKER_URL", "").rstrip("/")
 CF_EMBED_MODEL = "@cf/baai/bge-base-en-v1.5"
 CF_HEADERS = {
     "Authorization": f"Bearer {CF_API_TOKEN}",
@@ -1525,24 +1526,37 @@ async def pipeline_websocket(
                     )
 
             else:
-                if not CF_ACCOUNT_ID or not CF_API_TOKEN:
-                    bot("Cloudflare credentials missing — can't query the knowledge base.")
-                    continue
                 try:
                     log(f"RAG query: \"{user_text[:60]}\"", "info")
-                    vec     = _embed_query(user_text)
-                    matches = _rag_search(vec, top_k=15, domains=all_domains)
-                    if matches:
-                        domains_hit = list({
-                            m.get("metadata", {}).get("domain") for m in matches
-                        })
-                        log(f"  {len(matches)} chunks from: {', '.join(domains_hit)}", "info")
-                        context = _build_rag_context(matches)
-                        log("  Synthesizing answer with Gemini...", "info")
-                        answer  = _rag_answer(user_text, context)
-                        bot(answer)
+                    if RIVA_WORKER_URL:
+                        # Route through Cloudflare Worker (native AI + Vectorize bindings)
+                        log("  Calling Cloudflare Worker for inference...", "info")
+                        resp = requests.post(
+                            f"{RIVA_WORKER_URL}/chat",
+                            json={"query": user_text, "domains": all_domains},
+                            timeout=30,
+                        )
+                        resp.raise_for_status()
+                        data = resp.json()
+                        log(f"  Worker returned {data.get('sources', 0)} source chunks.", "info")
+                        bot(data.get("answer", "No answer returned."))
                     else:
-                        bot("No relevant data found. Have the agents finished extracting?")
+                        if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+                            bot("Cloudflare credentials missing — can't query the knowledge base.")
+                            continue
+                        vec     = _embed_query(user_text)
+                        matches = _rag_search(vec, top_k=15, domains=all_domains)
+                        if matches:
+                            domains_hit = list({
+                                m.get("metadata", {}).get("domain") for m in matches
+                            })
+                            log(f"  {len(matches)} chunks from: {', '.join(domains_hit)}", "info")
+                            context = _build_rag_context(matches)
+                            log("  Synthesizing answer with Gemini...", "info")
+                            answer  = _rag_answer(user_text, context)
+                            bot(answer)
+                        else:
+                            bot("No relevant data found. Have the agents finished extracting?")
                 except Exception as e:
                     bot(f"Query error: {e}")
 

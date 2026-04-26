@@ -4,6 +4,9 @@ import { useEffect, useRef, useState, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Play, Pause, ArrowRight, Send, Download, Maximize2, Minimize2 } from 'lucide-react';
 
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
+const WS_BASE  = API_BASE.replace(/^http/, 'ws');
+
 type Thought     = { text: string; state: string; ts: string };
 type PipelineLog = { text: string; state: string; ts: string };
 type ChatMsg     = { role: 'assistant' | 'user'; text: string; ts: string };
@@ -579,8 +582,8 @@ function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
       {!minimized && (
         <div className="flex" style={{ height: 560, gap: 1 }}>
           {reports.map((r, i) => {
-            const fullUrl    = `http://localhost:8000${r.url}`;
-            const previewUrl = `http://localhost:8000${r.previewUrl}`;
+            const fullUrl    = `${API_BASE}${r.url}`;
+            const previewUrl = `${API_BASE}${r.previewUrl}`;
             return (
               <div key={i} className="flex flex-col flex-1 min-w-0"
                 style={{ borderRight: i < reports.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
@@ -718,7 +721,7 @@ function DashboardContent() {
       try {
         const domain = new URL(url.startsWith('http') ? url : 'https://' + url).hostname
           .replace(/^www\./, '');
-        fetch(`http://localhost:8000/check-vectorized?domain=${encodeURIComponent(domain)}`)
+        fetch(`${API_BASE}/check-vectorized?domain=${encodeURIComponent(domain)}`)
           .then(r => r.json())
           .then(d => setter(!!d.vectorized))
           .catch(() => {});
@@ -735,7 +738,7 @@ function DashboardContent() {
 
   useEffect(() => {
     if (!sessionId || expected === 0) return;
-    const ws = new WebSocket(`ws://localhost:8000/ws/pipeline?session=${sessionId}&expected=${expected}`);
+    const ws = new WebSocket(`${WS_BASE}/ws/pipeline?session=${sessionId}&expected=${expected}`);
     pipelineWsRef.current = ws;
     ws.onopen  = () => {};
     ws.onclose = () => {};
@@ -759,7 +762,7 @@ function DashboardContent() {
 
   useEffect(() => {
     if (isRestoring || !rivaUrl) { setRivaWsState('closed'); return; }
-    const ws = new WebSocket(`ws://localhost:8000/ws/browse?session=${sessionId}&role=riva`);
+    const ws = new WebSocket(`${WS_BASE}/ws/browse?session=${sessionId}&role=riva`);
     rivaWsRef.current = ws;
     ws.onopen    = () => { setRivaWsState('open'); ws.send(JSON.stringify({ url: rivaUrl })); };
     ws.onclose   = () => setRivaWsState('closed');
@@ -777,7 +780,7 @@ function DashboardContent() {
 
   useEffect(() => {
     if (isRestoring || !compUrl) { setCompWsState('closed'); return; }
-    const ws = new WebSocket(`ws://localhost:8000/ws/browse?session=${sessionId}&role=comp`);
+    const ws = new WebSocket(`${WS_BASE}/ws/browse?session=${sessionId}&role=comp`);
     compWsRef.current = ws;
     ws.onopen    = () => { setCompWsState('open'); ws.send(JSON.stringify({ url: compUrl })); };
     ws.onclose   = () => setCompWsState('closed');
@@ -822,7 +825,7 @@ function DashboardContent() {
     wsRef.current?.close();
     setComplete(false); setPaused(false); setThoughts([]); setFrame('');
 
-    const ws = new WebSocket(`ws://localhost:8000/ws/browse?session=${sessionId}&role=${side}`);
+    const ws = new WebSocket(`${WS_BASE}/ws/browse?session=${sessionId}&role=${side}`);
     wsRef.current = ws;
     setWsState('connecting');
     ws.onopen  = () => { setWsState('open'); ws.send(JSON.stringify({ url })); };
