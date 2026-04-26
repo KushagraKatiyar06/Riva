@@ -12,6 +12,9 @@ import uuid
 import sqlite3
 import base64
 import hashlib
+import shutil
+import socket
+import subprocess
 import time
 import requests
 import concurrent.futures
@@ -295,6 +298,45 @@ _sessions: dict[str, _Session] = {}
 
 
 # ---------------------------------------------------------------------------
+# Chrome CDP helpers
+# ---------------------------------------------------------------------------
+def _launch_bare_chrome(target_url: str, debug_port: int, user_data_dir: str):
+    """Launch Chrome without Playwright automation flags (bypasses Turnstile detection)."""
+    chrome_exe = shutil.which("chrome") or shutil.which("google-chrome")
+    if not chrome_exe:
+        for path in [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        ]:
+            if os.path.exists(path):
+                chrome_exe = path
+                break
+    if not chrome_exe:
+        raise RuntimeError("Chrome executable not found")
+    return subprocess.Popen([
+        chrome_exe,
+        f"--remote-debugging-port={debug_port}",
+        f"--user-data-dir={user_data_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        target_url,
+    ])
+
+
+def _wait_for_debug_port(port: int, timeout: int = 15) -> bool:
+    """Wait until Chrome's remote debugging port is accepting connections."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("localhost", port), timeout=1):
+                return True
+        except OSError:
+            time.sleep(0.5)
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Extract saver
 # ---------------------------------------------------------------------------
 def save_extract(domain: str, intel_type: str, url: str, content: str) -> str:
@@ -484,26 +526,47 @@ async def browse_websocket(
                     return False
 
             def find_element(page, keywords):
+                def _try_scroll_and_return(loc, k):
+                    """Scroll element into view; return it if it exists, even if off-screen."""
+                    try:
+                        el = loc.first
+                        # Try scrolling into view — works for footer/off-screen elements
+                        try:
+                            el.scroll_into_view_if_needed(timeout=500)
+                        except Exception:
+                            pass
+                        if el.is_visible(timeout=500):
+                            return el, k
+                        # Element exists but still not "visible" (e.g. opacity:0) — try anyway
+                        if el.count() > 0:
+                            return el, k
+                    except Exception:
+                        pass
+                    return None, None
+
                 for k in keywords:
                     for role_name in ["link", "button", "menuitem"]:
                         try:
                             loc = page.get_by_role(role_name, name=k, exact=False)
-                            if loc.first.is_visible(timeout=300):
-                                return loc.first, k
+                            el, matched = _try_scroll_and_return(loc, k)
+                            if el:
+                                return el, matched
                         except Exception:
                             pass
-                    try:
-                        loc = page.get_by_text(k, exact=False)
-                        if loc.first.is_visible(timeout=300):
-                            return loc.first, k
-                    except Exception:
-                        pass
                     try:
                         loc = page.locator(
                             f'a:has-text("{k}"), button:has-text("{k}")'
                         )
-                        if loc.first.is_visible(timeout=300):
-                            return loc.first, k
+                        el, matched = _try_scroll_and_return(loc, k)
+                        if el:
+                            return el, matched
+                    except Exception:
+                        pass
+                    try:
+                        loc = page.get_by_text(k, exact=False)
+                        el, matched = _try_scroll_and_return(loc, k)
+                        if el:
+                            return el, matched
                     except Exception:
                         pass
                 return None, None
@@ -520,14 +583,15 @@ async def browse_websocket(
                     f"Riva Pathfinder Mission — current page: {current_url}\n"
                     f"MILESTONES : {p_text} | {d_text}\n"
                     f"RECENT URLS: {recent}\n"
-                    f"PAGE HEADINGS & NAV: {headings[:600]}\n\n"
+                    f"PAGE HEADINGS & NAV & FOOTER: {headings[:1200]}\n\n"
                     "RULES:\n"
                     "- Only pursue NOT_STARTED milestones.\n"
                     "- If Pricing is COMPLETED focus entirely on Documentation.\n"
                     "- HOVER nav items like 'Developers' or 'Products' to reveal sub-menus.\n"
+                    "- Check footer links — many sites put Docs/Documentation in the footer.\n"
                     "- If a URL appears twice in RECENT URLS, try a different element.\n\n"
                     'Reply ONLY with JSON (no markdown): {"thought": "..", "goal": "CLICK"|"HOVER"|"SURVEY"|"FINISH", "target": ".."}\n\n'
-                    f"Page text:\n{page_content[:5000]}"
+                    f"Page text:\n{page_content[:7000]}"
                 )
 
                 def _call():
@@ -612,6 +676,9 @@ async def browse_websocket(
                 thought(f"Docs crawl complete — {count} pages saved.", "found")
                 return count
 
+            # Mutable flag: when True, a goto from the user auto-resumes the agent
+            _stuck_pause = [False]
+
             def handle_gestures(page):
                 while not action_q.empty():
                     act  = action_q.get_nowait()
@@ -633,6 +700,11 @@ async def browse_websocket(
                             page.goto(
                                 t_url, wait_until="domcontentloaded", timeout=10000
                             )
+                            # If we were stuck waiting for a URL from the user, auto-resume
+                            if _stuck_pause[0]:
+                                _stuck_pause[0] = False
+                                thought("URL received — resuming agent.", "info")
+                                pause_event.set()
                     except Exception as e:
                         print(f"Gesture error: {e}")
 
@@ -659,125 +731,194 @@ async def browse_websocket(
                 "Chrome/124.0.0.0 Safari/537.36"
             )
 
+            _chrome_proc = None  # bare Chrome subprocess for CDP fallback
             try:
                 with sync_playwright() as p:
-                    # Prefer real Chrome with persistent profile; fall back to Chromium
-                    ctx = None
-                    browser = None
-                    try:
-                        ctx = p.chromium.launch_persistent_context(
-                            str(profile_dir),
-                            headless=False,
-                            channel="chrome",
-                            args=_LAUNCH_ARGS,
-                            user_agent=_UA,
-                            locale="en-US",
-                            timezone_id="America/New_York",
-                            viewport={"width": 1280, "height": 720},
-                        )
-                        thought("Launched Chrome with persistent profile.", "info")
-                    except Exception as launch_err:
-                        thought(f"Chrome unavailable ({launch_err}) — using Chromium.", "info")
-                        browser = p.chromium.launch(headless=False, args=_LAUNCH_ARGS)
-                        ctx = browser.new_context(
-                            viewport={"width": 1280, "height": 720},
-                            user_agent=_UA,
-                            locale="en-US",
-                            timezone_id="America/New_York",
-                        )
+                    for _attempt in range(2):
+                        ctx = None
+                        browser = None
+                        _retry_with_cdp = False
 
-                    page = ctx.pages[0] if ctx.pages else ctx.new_page()
-
-                    # Pre-create the extract folder for this domain so it exists
-                    # from the moment the browser opens, not on first save
-                    _domain_dir = EXTRACTS_DIR / finishing_domain
-                    _folder_existed = _domain_dir.exists()
-                    _domain_dir.mkdir(parents=True, exist_ok=True)
-                    if _folder_existed:
-                        existing = len(list(_domain_dir.glob("*.txt")))
-                        thought(f"Extract folder already exists: extracts/{finishing_domain}/ ({existing} files)", "info")
-                    else:
-                        thought(f"Extract folder created: extracts/{finishing_domain}/", "info")
-
-                    # Apply stealth patches if available
-                    try:
-                        from playwright_stealth import stealth_sync
-                        stealth_sync(page)
-                    except ImportError:
-                        pass
-
-                    cdp = ctx.new_cdp_session(page)
-
-                    def on_frame(params):
-                        if stop_event.is_set():
-                            return
-                        try:
-                            cdp.send(
-                                "Page.screencastFrameAck",
-                                {"sessionId": int(params["sessionId"])},
+                        if _attempt == 0:
+                            # Normal Playwright launch with persistent profile
+                            try:
+                                ctx = p.chromium.launch_persistent_context(
+                                    str(profile_dir),
+                                    headless=False,
+                                    channel="chrome",
+                                    args=_LAUNCH_ARGS,
+                                    user_agent=_UA,
+                                    locale="en-US",
+                                    timezone_id="America/New_York",
+                                    viewport={"width": 1280, "height": 720},
+                                )
+                                thought("Launched Chrome with persistent profile.", "info")
+                            except Exception as launch_err:
+                                thought(f"Chrome unavailable ({launch_err}) — using Chromium.", "info")
+                                browser = p.chromium.launch(headless=False, args=_LAUNCH_ARGS)
+                                ctx = browser.new_context(
+                                    viewport={"width": 1280, "height": 720},
+                                    user_agent=_UA,
+                                    locale="en-US",
+                                    timezone_id="America/New_York",
+                                )
+                        else:
+                            # CDP fallback — launch bare Chrome (no automation flags)
+                            thought(
+                                "Challenge loop detected — launching Chrome without automation flags.",
+                                "error",
                             )
-                        except Exception:
+                            debug_port = 9222
+                            cdp_profile = str(profile_dir) + "_cdp"
+                            try:
+                                _chrome_proc = _launch_bare_chrome(
+                                    target_url, debug_port, cdp_profile
+                                )
+                                if not _wait_for_debug_port(debug_port):
+                                    thought("CDP port did not open in time — aborting.", "error")
+                                    break
+                                thought("Connecting to Chrome over CDP...", "info")
+                                cdp_browser = p.chromium.connect_over_cdp(
+                                    f"http://localhost:{debug_port}"
+                                )
+                                ctx = (
+                                    cdp_browser.contexts[0]
+                                    if cdp_browser.contexts
+                                    else cdp_browser.new_context(
+                                        viewport={"width": 1280, "height": 720},
+                                        user_agent=_UA,
+                                    )
+                                )
+                                browser = cdp_browser
+                            except Exception as cdp_err:
+                                thought(f"CDP launch failed: {cdp_err}", "error")
+                                break
+
+                        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+
+                        # Pre-create the extract folder for this domain so it exists
+                        # from the moment the browser opens, not on first save
+                        _domain_dir = EXTRACTS_DIR / finishing_domain
+                        _folder_existed = _domain_dir.exists()
+                        _domain_dir.mkdir(parents=True, exist_ok=True)
+                        if _folder_existed:
+                            existing = len(list(_domain_dir.glob("*.txt")))
+                            thought(f"Extract folder already exists: extracts/{finishing_domain}/ ({existing} files)", "info")
+                        else:
+                            thought(f"Extract folder created: extracts/{finishing_domain}/", "info")
+
+                        # Apply stealth patches if available
+                        try:
+                            from playwright_stealth import stealth_sync
+                            stealth_sync(page)
+                        except ImportError:
                             pass
-                        if not frame_q.full():
-                            frame_q.put_nowait(params["data"])
 
-                    cdp.on("Page.screencastFrame", on_frame)
-                    cdp.send("Page.startScreencast", {
-                        "format": "jpeg", "quality": 60, "everyNthFrame": 2,
-                    })
+                        cdp_session = ctx.new_cdp_session(page)
 
-                    thought(f"Mission started: {target_url}", "navigating")
-                    page.goto(target_url, wait_until="domcontentloaded")
-                    visited_urls.append(target_url)
+                        def on_frame(params):
+                            if stop_event.is_set():
+                                return
+                            try:
+                                cdp_session.send(
+                                    "Page.screencastFrameAck",
+                                    {"sessionId": int(params["sessionId"])},
+                                )
+                            except Exception:
+                                pass
+                            if not frame_q.full():
+                                frame_q.put_nowait(params["data"])
 
-                    frustration       = 0
-                    challenge_cooldown = 0   # steps to skip challenge re-check after solve
-                    was_paused         = False
+                        cdp_session.on("Page.screencastFrame", on_frame)
+                        cdp_session.send("Page.startScreencast", {
+                            "format": "jpeg", "quality": 60, "everyNthFrame": 2,
+                        })
 
-                    for step in range(80):
-                        if stop_event.is_set():
-                            break
+                        thought(f"Mission started: {target_url}", "navigating")
+                        # On CDP attempt, Chrome already opened target_url; only navigate if needed
+                        if _attempt == 0 or page.url.rstrip("/") != target_url.rstrip("/"):
+                            page.goto(target_url, wait_until="domcontentloaded")
+                        visited_urls.append(target_url)
 
-                        was_paused = not pause_event.is_set()
-                        while not pause_event.is_set():
-                            handle_gestures(page)
+                        frustration     = 0
+                        challenge_count = 0   # total challenge detections this attempt
+                        challenge_cooldown = 0
+                        was_paused      = False
+
+                        for step in range(80):
                             if stop_event.is_set():
                                 break
-                            page.wait_for_timeout(100)
-                        if stop_event.is_set():
-                            break
 
-                        # After resuming from a pause (e.g. challenge solved),
-                        # wait for the page to fully settle before the agent acts
-                        if was_paused:
-                            thought("Resumed — waiting for page to settle...", "info")
-                            page.wait_for_timeout(3500)
+                            was_paused = not pause_event.is_set()
+                            while not pause_event.is_set():
+                                handle_gestures(page)
+                                if stop_event.is_set():
+                                    break
+                                page.wait_for_timeout(100)
+                            if stop_event.is_set():
+                                break
 
-                        handle_gestures(page)
+                            # After resuming from a pause (e.g. challenge solved),
+                            # wait for the page to fully settle before the agent acts
+                            if was_paused:
+                                thought("Resumed — waiting for page to settle...", "info")
+                                page.wait_for_load_state("domcontentloaded")
+                                page.wait_for_timeout(5000)
 
-                        curr_url = page.url
-                        if not visited_urls or visited_urls[-1] != curr_url:
-                            visited_urls.append(curr_url)
+                            handle_gestures(page)
 
-                        curr_lower = curr_url.lower()
-                        progress   = False
-                        domain     = urlparse(curr_url).hostname or "unknown"
+                            curr_url = page.url
+                            if not visited_urls or visited_urls[-1] != curr_url:
+                                visited_urls.append(curr_url)
 
-                        # Detect bot-protection challenge pages (with cooldown after solve)
-                        if challenge_cooldown > 0:
-                            challenge_cooldown -= 1
-                        else:
-                            try:
-                                page_title = page.title()
-                                is_challenge = (
-                                    "just a moment" in page_title.lower()
-                                    or "cdn-cgi" in curr_lower
-                                    or "cf-challenge" in curr_lower
-                                    or "are you human" in page_title.lower()
-                                    or "verify you are human" in page_title.lower()
-                                    or "enable javascript" in page_title.lower()
-                                )
-                                if is_challenge:
+                            curr_lower = curr_url.lower()
+                            progress   = False
+                            domain     = urlparse(curr_url).hostname or "unknown"
+
+                            # Detect bot-protection challenge pages
+                            def _is_challenge_page():
+                                try:
+                                    title = page.title().lower()
+                                    return (
+                                        "just a moment" in title
+                                        or "are you human" in title
+                                        or "verify you are human" in title
+                                        or "enable javascript" in title
+                                        or "cdn-cgi" in curr_lower
+                                        or "cf-challenge" in curr_lower
+                                    )
+                                except Exception:
+                                    return False
+
+                            if challenge_cooldown > 0:
+                                challenge_cooldown -= 1
+                                # Even during cooldown: if another challenge appears,
+                                # count it and decide whether to escalate to CDP fallback.
+                                if _is_challenge_page():
+                                    challenge_count += 1
+                                    if challenge_count >= 2 and _attempt == 0:
+                                        thought(
+                                            "Challenge loop detected — will retry with native Chrome.",
+                                            "error",
+                                        )
+                                        _retry_with_cdp = True
+                                        break
+                                    thought("Challenge page (in cooldown) — pausing for manual solve.", "error")
+                                    thought_q.put({"type": "auto_pause"})
+                                    pause_event.clear()
+                                    challenge_cooldown = 15
+                                    page.wait_for_timeout(500)
+                                    continue
+                            else:
+                                if _is_challenge_page():
+                                    challenge_count += 1
+                                    if challenge_count >= 2 and _attempt == 0:
+                                        thought(
+                                            "Challenge loop detected — will retry with native Chrome.",
+                                            "error",
+                                        )
+                                        _retry_with_cdp = True
+                                        break
                                     thought(
                                         "Bot protection detected — solve the challenge in "
                                         "the browser, wait for the page to fully load, "
@@ -786,172 +927,188 @@ async def browse_websocket(
                                     )
                                     thought_q.put({"type": "auto_pause"})
                                     pause_event.clear()
-                                    challenge_cooldown = 15  # give 15 steps before re-checking
+                                    challenge_cooldown = 15
                                     page.wait_for_timeout(500)
                                     continue
+
+                            if not objectives["pricing"] and any(
+                                k in curr_lower for k in ["pricing", "plans", "tier"]
+                            ):
+                                thought(
+                                    "Milestone: Pricing page found — extracting.", "found"
+                                )
+                                page.wait_for_timeout(800)
+                                content = full_page_extract(page)
+                                save_intel("pricing", curr_url, content)
+                                save_extract(finishing_domain, "pricing", curr_url, content)
+                                thought(f"Pricing saved ({len(content):,} chars).", "found")
+                                objectives["pricing"] = True
+                                progress = True
+                                page.goto(target_url, wait_until="domcontentloaded")
+
+                            if not objectives["docs"] and any(
+                                k in curr_lower
+                                for k in ["docs", "documentation", "api", "guide", "developer"]
+                            ):
+                                if curr_url != target_url:
+                                    thought("Milestone: Docs found — crawling.", "found")
+                                    page.wait_for_timeout(800)
+                                    crawl_docs(page, curr_url, finishing_domain)
+                                    objectives["docs"] = True
+                                    progress = True
+
+                            if progress:
+                                frustration = 0
+                                if objectives["pricing"] and objectives["docs"]:
+                                    thought("All milestones complete.", "complete")
+                                    break
+                                continue
+
+                            try:
+                                content  = page.evaluate("() => document.body.innerText")
+                                headings = page.evaluate(
+                                    "() => Array.from(document.querySelectorAll('h1,h2,h3,nav a,header a,footer a,[role=navigation] a'))"
+                                    ".map(e => e.innerText.trim()).filter(Boolean).join(' | ')"
+                                )
+                                decision = ask_brain(content, page.url, headings)
+                                goal     = decision.get("goal")
+                                label    = decision.get("target", "")
+                                thought(decision.get("thought", "Analyzing..."), "scanning")
+
+                                if goal in ["CLICK", "HOVER"]:
+                                    el, matched = (
+                                        find_element(page, [label]) if label else (None, None)
+                                    )
+                                    if not el:
+                                        fallback = (
+                                            ["Pricing", "Plans", "Price"]
+                                            if not objectives["pricing"]
+                                            else [
+                                                "Docs", "Documentation", "Developers",
+                                                "API", "Guide", "Reference",
+                                            ]
+                                        )
+                                        el, matched = find_element(page, fallback)
+
+                                    if el:
+                                        frustration = 0
+                                        thought(f"Targeting: {matched}", "clicking")
+                                        el.evaluate(
+                                            "el => { el.scrollIntoView({behavior:'smooth',block:'center'});"
+                                            " el.style.outline='4px solid cyan'; }"
+                                        )
+                                        page.wait_for_timeout(800)
+                                        el.hover(force=True)
+                                        if goal == "CLICK":
+                                            url_before = page.url
+                                            el.evaluate(
+                                                "el => el.setAttribute('target', '_self')"
+                                            )
+                                            try:
+                                                el.click(force=True, timeout=3000)
+                                            except Exception:
+                                                el.evaluate("el => el.click()")
+                                            page.wait_for_timeout(2000)
+                                            if page.url == url_before:
+                                                try:
+                                                    href = el.evaluate(
+                                                        "el => el.href || el.getAttribute('href') || ''"
+                                                    )
+                                                    if (
+                                                        href
+                                                        and href.startswith("http")
+                                                        and href != url_before
+                                                    ):
+                                                        thought(
+                                                            "Click didn't navigate — going via href",
+                                                            "navigating",
+                                                        )
+                                                        page.goto(
+                                                            href,
+                                                            wait_until="domcontentloaded",
+                                                            timeout=10000,
+                                                        )
+                                                    else:
+                                                        thought(
+                                                            "Click had no effect — scrolling",
+                                                            "info",
+                                                        )
+                                                        page.evaluate("window.scrollBy(0, 400)")
+                                                except Exception:
+                                                    pass
+                                        page.wait_for_timeout(1000)
+                                    else:
+                                        frustration += 1
+                                        thought(
+                                            f"Element not found (frustration {frustration}/3)", "info"
+                                        )
+                                        if frustration >= 3:
+                                            milestone = (
+                                                "docs" if objectives["pricing"] else "pricing"
+                                            )
+                                            thought(
+                                                f"Couldn't find {milestone} after 3 attempts — "
+                                                "pausing. Paste the URL in the bar above and "
+                                                "I'll take it from there.",
+                                                "error",
+                                            )
+                                            thought_q.put({
+                                                "type": "stuck_guidance",
+                                                "milestone": milestone,
+                                            })
+                                            thought_q.put({"type": "auto_pause"})
+                                            pause_event.clear()
+                                            _stuck_pause[0] = True
+                                            frustration = 0
+                                        else:
+                                            page.evaluate("window.scrollBy(0, 600)")
+                                            page.wait_for_timeout(500)
+
+                                elif goal == "FINISH":
+                                    if objectives["pricing"] and objectives["docs"]:
+                                        thought("Mission complete.", "complete")
+                                        break
+                                    else:
+                                        thought(
+                                            "FINISH requested but milestones incomplete.", "info"
+                                        )
+
+                            except Exception as e:
+                                thought(f"Step error: {e}", "info")
+
+                            page.wait_for_timeout(500)
+
+                        # ---- end of step loop ----
+
+                        # Close this attempt's browser before retrying (or on success)
+                        try:
+                            ctx.close()
+                        except Exception:
+                            pass
+                        if browser:
+                            try:
+                                browser.close()
                             except Exception:
                                 pass
 
-                        if not objectives["pricing"] and any(
-                            k in curr_lower for k in ["pricing", "plans", "tier"]
-                        ):
-                            thought(
-                                "Milestone: Pricing page found — extracting.", "found"
-                            )
-                            page.wait_for_timeout(800)
-                            content = full_page_extract(page)
-                            save_intel("pricing", curr_url, content)
-                            save_extract(finishing_domain, "pricing", curr_url, content)
-                            thought(f"Pricing saved ({len(content):,} chars).", "found")
-                            objectives["pricing"] = True
-                            progress = True
-                            page.goto(target_url, wait_until="domcontentloaded")
+                        if _retry_with_cdp:
+                            # Pause event may be set from previous run; ensure agent starts fresh
+                            pause_event.set()
+                            continue  # go to attempt 1
 
-                        if not objectives["docs"] and any(
-                            k in curr_lower
-                            for k in ["docs", "documentation", "api", "guide", "developer"]
-                        ):
-                            if curr_url != target_url:
-                                thought("Milestone: Docs found — crawling.", "found")
-                                page.wait_for_timeout(800)
-                                crawl_docs(page, curr_url, finishing_domain)
-                                objectives["docs"] = True
-                                progress = True
+                        # Normal successful finish
+                        finish_session("complete")
+                        thought("Scraping complete — returning to homepage.", "complete")
+                        thought_q.put({"type": "browse_complete"})
 
-                        if progress:
-                            frustration = 0
-                            if objectives["pricing"] and objectives["docs"]:
-                                thought("All milestones complete.", "complete")
-                                break
-                            continue
+                        # Signal pipeline — triggers immediate vectorization for this domain
+                        if session and session in _sessions:
+                            _sessions[session].mark_complete(finishing_domain)
 
-                        try:
-                            content  = page.evaluate("() => document.body.innerText")
-                            headings = page.evaluate(
-                                "() => Array.from(document.querySelectorAll('h1,h2,h3,nav a,header a'))"
-                                ".map(e => e.innerText.trim()).filter(Boolean).join(' | ')"
-                            )
-                            decision = ask_brain(content, page.url, headings)
-                            goal     = decision.get("goal")
-                            label    = decision.get("target", "")
-                            thought(decision.get("thought", "Analyzing..."), "scanning")
-
-                            if goal in ["CLICK", "HOVER"]:
-                                el, matched = (
-                                    find_element(page, [label]) if label else (None, None)
-                                )
-                                if not el:
-                                    fallback = (
-                                        ["Pricing", "Plans", "Price"]
-                                        if not objectives["pricing"]
-                                        else [
-                                            "Docs", "Documentation", "Developers",
-                                            "API", "Guide", "Reference",
-                                        ]
-                                    )
-                                    el, matched = find_element(page, fallback)
-
-                                if el:
-                                    frustration = 0
-                                    thought(f"Targeting: {matched}", "clicking")
-                                    el.evaluate(
-                                        "el => { el.scrollIntoView({behavior:'smooth',block:'center'});"
-                                        " el.style.outline='4px solid cyan'; }"
-                                    )
-                                    page.wait_for_timeout(800)
-                                    el.hover(force=True)
-                                    if goal == "CLICK":
-                                        url_before = page.url
-                                        el.evaluate(
-                                            "el => el.setAttribute('target', '_self')"
-                                        )
-                                        try:
-                                            el.click(force=True, timeout=3000)
-                                        except Exception:
-                                            el.evaluate("el => el.click()")
-                                        page.wait_for_timeout(2000)
-                                        if page.url == url_before:
-                                            try:
-                                                href = el.evaluate(
-                                                    "el => el.href || el.getAttribute('href') || ''"
-                                                )
-                                                if (
-                                                    href
-                                                    and href.startswith("http")
-                                                    and href != url_before
-                                                ):
-                                                    thought(
-                                                        "Click didn't navigate — going via href",
-                                                        "navigating",
-                                                    )
-                                                    page.goto(
-                                                        href,
-                                                        wait_until="domcontentloaded",
-                                                        timeout=10000,
-                                                    )
-                                                else:
-                                                    thought(
-                                                        "Click had no effect — scrolling",
-                                                        "info",
-                                                    )
-                                                    page.evaluate("window.scrollBy(0, 400)")
-                                            except Exception:
-                                                pass
-                                    page.wait_for_timeout(1000)
-                                else:
-                                    frustration += 1
-                                    thought(
-                                        f"Element not found (frustration {frustration}/3)", "info"
-                                    )
-                                    if frustration >= 3:
-                                        thought(
-                                            "Agent stuck — pausing for manual guidance.", "error"
-                                        )
-                                        thought_q.put({"type": "auto_pause"})
-                                        pause_event.clear()
-                                        frustration = 0
-                                    else:
-                                        page.evaluate("window.scrollBy(0, 600)")
-                                        page.wait_for_timeout(500)
-
-                            elif goal == "FINISH":
-                                if objectives["pricing"] and objectives["docs"]:
-                                    thought("Mission complete.", "complete")
-                                    break
-                                else:
-                                    thought(
-                                        "FINISH requested but milestones incomplete.", "info"
-                                    )
-
-                        except Exception as e:
-                            thought(f"Step error: {e}", "info")
-
-                        page.wait_for_timeout(500)
-
-                    finish_session("complete")
-                    thought("Scraping complete — returning to homepage.", "complete")
-                    thought_q.put({"type": "browse_complete"})
-                    try:
-                        page.goto(target_url, wait_until="domcontentloaded", timeout=10000)
-                    except Exception:
-                        pass
-
-                    # Signal pipeline — triggers immediate vectorization for this domain
-                    if session and session in _sessions:
-                        _sessions[session].mark_complete(finishing_domain)
-
-                    # Close browser automatically — no idle loop
-                    thought("Closing browser window.", "info")
-                    stop_event.set()
-                    try:
-                        ctx.close()
-                    except Exception:
-                        pass
-                    if browser:
-                        try:
-                            browser.close()
-                        except Exception:
-                            pass
+                        # Close WS stream
+                        thought("Closing browser window.", "info")
+                        stop_event.set()
+                        break  # don't retry
 
             except Exception as e:
                 thought(f"Fatal error: {e}", "error")
@@ -960,6 +1117,11 @@ async def browse_websocket(
                 if session and session in _sessions:
                     _sessions[session].mark_complete(finishing_domain)
             finally:
+                if _chrome_proc:
+                    try:
+                        _chrome_proc.terminate()
+                    except Exception:
+                        pass
                 thought_q.put({"__sentinel__": True})
 
         thread = threading.Thread(target=run_browser, daemon=True)

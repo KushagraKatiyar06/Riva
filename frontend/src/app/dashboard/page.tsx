@@ -69,7 +69,7 @@ function ThoughtLog({
 // ---------------------------------------------------------------------------
 function BrowserPanel({
   label, color, frameSrc, active, isPaused, isComplete, wsActive,
-  onTogglePause, onInteraction, onGoto, onRestart,
+  stuckMilestone, onTogglePause, onInteraction, onGoto, onRestart,
 }: any) {
   const [manualUrl, setManualUrl] = useState('');
 
@@ -150,6 +150,17 @@ function BrowserPanel({
         )}
         {isPaused && !isComplete && (
           <div className="absolute inset-0 border-2 border-yellow-500/20 pointer-events-none shadow-[inset_0_0_80px_rgba(234,179,8,0.1)]" />
+        )}
+        {stuckMilestone && !isComplete && (
+          <div className="absolute bottom-0 left-0 right-0 px-4 py-3 flex flex-col gap-1.5"
+            style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.92) 80%, transparent)' }}>
+            <div className="text-[10px] font-bold tracking-[2px] uppercase" style={{ color: '#ffcc00' }}>
+              ⚠ Couldn't find {stuckMilestone}
+            </div>
+            <div className="text-[10px] text-white/50 leading-5">
+              Paste the <span className="text-white/80">{stuckMilestone}</span> URL in the bar above ↑ — agent will resume automatically.
+            </div>
+          </div>
         )}
         {isComplete && frameSrc && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -485,6 +496,8 @@ function DashboardContent() {
   const [compWsState,   setCompWsState]   = useState<'connecting' | 'open' | 'closed'>(
     isRestoring ? 'closed' : 'connecting'
   );
+  const [rivaStuckMilestone, setRivaStuckMilestone] = useState<string | null>(null);
+  const [compStuckMilestone, setCompStuckMilestone] = useState<string | null>(null);
 
   // Pipeline state
   const [pipelineLogs,    setPipelineLogs]    = useState<PipelineLog[]>(savedSession?.pipelineLogs    || []);
@@ -562,8 +575,11 @@ function DashboardContent() {
         setRivaThoughts(p => [...p, { ...msg, ts: now() }]);
       } else if (msg.type === 'auto_pause') {
         setRivaPaused(true);
+      } else if (msg.type === 'stuck_guidance') {
+        setRivaStuckMilestone(msg.milestone);
       } else if (msg.type === 'browse_complete') {
         setRivaComplete(true);
+        setRivaStuckMilestone(null);
       }
     };
     return () => ws.close();
@@ -587,8 +603,11 @@ function DashboardContent() {
         setCompThoughts(p => [...p, { ...msg, ts: now() }]);
       } else if (msg.type === 'auto_pause') {
         setCompPaused(true);
+      } else if (msg.type === 'stuck_guidance') {
+        setCompStuckMilestone(msg.milestone);
       } else if (msg.type === 'browse_complete') {
         setCompComplete(true);
+        setCompStuckMilestone(null);
       }
     };
     return () => ws.close();
@@ -714,10 +733,14 @@ function DashboardContent() {
                 label="RIVA" color="#00ffff" frameSrc={rivaFrame} active
                 isPaused={rivaPaused} isComplete={rivaComplete}
                 wsActive={rivaWsState === 'open'}
+                stuckMilestone={rivaStuckMilestone}
                 onTogglePause={() => togglePause('riva')}
                 onInteraction={(t: string, x: number, y: number) =>
                   sendToWs(rivaWsRef, { type: t, x, y })}
-                onGoto={(url: string) => sendToWs(rivaWsRef, { type: 'goto', url })}
+                onGoto={(url: string) => {
+                  setRivaStuckMilestone(null);
+                  sendToWs(rivaWsRef, { type: 'goto', url });
+                }}
                 onRestart={(url: string) => restartBrowse(url, 'riva')}
               />
             </div>
@@ -733,10 +756,14 @@ function DashboardContent() {
                 label="COMP" color="#ff3333" frameSrc={compFrame} active
                 isPaused={compPaused} isComplete={compComplete}
                 wsActive={compWsState === 'open'}
+                stuckMilestone={compStuckMilestone}
                 onTogglePause={() => togglePause('comp')}
                 onInteraction={(t: string, x: number, y: number) =>
                   sendToWs(compWsRef, { type: t, x, y })}
-                onGoto={(url: string) => sendToWs(compWsRef, { type: 'goto', url })}
+                onGoto={(url: string) => {
+                  setCompStuckMilestone(null);
+                  sendToWs(compWsRef, { type: 'goto', url });
+                }}
                 onRestart={(url: string) => restartBrowse(url, 'comp')}
               />
             </div>
