@@ -88,125 +88,128 @@ export default function Home() {
   }
 
   return (
-    <main className="bg-[#050a15] text-white" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
+    <main className="text-white" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
 
       {/* ── HERO ───────────────────────────────────────────────── */}
       <section
         className="min-h-screen flex flex-col items-center justify-center relative overflow-hidden"
-        style={{ background: 'radial-gradient(circle at center, #111d35 0%, #050a15 80%)' }}
+        style={{ background: 'radial-gradient(ellipse at 50% 40%, #2a1a60 0%, #1a0d40 35%, #0d0820 70%, #060412 100%)' }}
       >
         {/* Subtle grid overlay */}
         <div
-          className="absolute inset-0 opacity-5"
+          className="absolute inset-0 opacity-[0.04]"
           style={{
             backgroundImage:
-              'linear-gradient(#00ffff 1px, transparent 1px), linear-gradient(90deg, #00ffff 1px, transparent 1px)',
+              'linear-gradient(rgba(160,120,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(160,120,255,1) 1px, transparent 1px)',
             backgroundSize: '60px 60px',
           }}
         />
 
-        <h1
-          className="text-7xl font-thin tracking-[20px] uppercase mb-12 relative"
-          style={{ opacity: 0.85, letterSpacing: '20px' }}
-        >
-          RIVA
-        </h1>
-
-        {/* Dual eyes */}
-        <div className="flex gap-24 mb-14">
-          {/* Riva eye — cyan */}
-          <div className="w-64 text-center">
-            <svg viewBox="0 0 200 120" overflow="visible">
-              <defs>
-                <clipPath id="eye-clip-r">
-                  <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" />
-                </clipPath>
-              </defs>
-              <g clipPath="url(#eye-clip-r)">
-                <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" fill="#e0f7fa" />
-                <g ref={rivaPupilRef} style={{ transition: 'transform 0.4s cubic-bezier(0.175,0.885,0.32,1.275)' }}>
-                  <circle cx="100" cy="60" r="28" fill="#002233" />
-                  <circle
-                    id="riva-glow-el"
-                    cx="100" cy="60" r="10" fill="#00ffff"
-                    style={{ filter: 'drop-shadow(0 0 10px #00ffff)', transition: 'r 0.4s' }}
-                  />
-                </g>
-                <rect
-                  ref={rivaLidRef}
-                  width="200" height="120" fill="#1a2a4a"
-                  style={{ transform: 'translateY(-100%)', transition: 'transform 0.15s ease-in-out' }}
-                />
-              </g>
-              <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#00ffff" strokeWidth="2" opacity="0.25" />
-            </svg>
-            <p className="mt-3 text-xs font-bold tracking-[4px] uppercase" style={{ color: '#00ffff', textShadow: '0 0 10px #00ffff55' }}>
-              YOUR SITE
-            </p>
-          </div>
-
-          {/* Competitor eye — red */}
-          <div className="w-64 text-center">
-            <svg viewBox="0 0 200 120" overflow="visible">
-              <defs>
-                <clipPath id="eye-clip-c">
-                  <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" />
-                </clipPath>
-              </defs>
-              <g clipPath="url(#eye-clip-c)">
-                <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" fill="#fbe9e7" />
-                <g ref={compPupilRef} style={{ transition: 'transform 0.4s cubic-bezier(0.175,0.885,0.32,1.275)' }}>
-                  <circle cx="100" cy="60" r="28" fill="#330000" />
-                  <circle
-                    id="comp-glow-el"
-                    cx="100" cy="60" r="10" fill="#ff3333"
-                    style={{ filter: 'drop-shadow(0 0 10px #ff3333)', transition: 'r 0.4s' }}
-                  />
-                </g>
-                <rect
-                  ref={compLidRef}
-                  width="200" height="120" fill="#2a1a1a"
-                  style={{ transform: 'translateY(-100%)', transition: 'transform 0.15s ease-in-out' }}
-                />
-              </g>
-              <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#ff3333" strokeWidth="2" opacity="0.25" />
-            </svg>
-            <p className="mt-3 text-xs font-bold tracking-[4px] uppercase" style={{ color: '#ff3333', textShadow: '0 0 10px #ff333355' }}>
-              COMPETITOR
-            </p>
-          </div>
-        </div>
-
-        {/* Magnetic smile CTA */}
-        <div
-          ref={ctaRef}
-          onClick={scrollToInput}
-          className="flex flex-col items-center cursor-pointer select-none"
-          style={{
-            animation: 'breath 4s infinite ease-in-out',
-          }}
-        >
-          <svg viewBox="0 0 200 60" style={{ width: 220, overflow: 'visible' }}>
-            <path
-              ref={smileRef}
-              d="M20,10 Q100,50 180,10"
-              fill="none"
-              stroke="#00ffff"
-              strokeWidth="3"
-              strokeLinecap="round"
-              style={{ transition: 'stroke 0.2s' }}
-            />
-          </svg>
-          <span
-            className="text-xs font-bold tracking-[5px] uppercase mt-2"
-            style={{ color: '#00ffff', opacity: 0.7 }}
+        <div className="flex flex-col items-center relative z-10">
+          <h1
+            className="text-7xl font-thin tracking-[20px] uppercase mb-2"
+            style={{ color: '#c8aaff', textShadow: '0 0 40px rgba(160,100,255,0.4)', letterSpacing: '20px' }}
           >
-            Enter Nexus
-          </span>
+            RIVA
+          </h1>
+          <p className="text-xs tracking-[4px] uppercase mb-14" style={{ color: 'rgba(200,170,255,0.4)' }}>
+            Agentic Competitive Analysis Tool
+          </p>
+
+          {/* Dual eyes */}
+          <div className="flex gap-24 mb-14">
+            {/* Riva eye — cyan */}
+            <div className="w-64 text-center">
+              <svg viewBox="0 0 200 120" overflow="visible">
+                <defs>
+                  <clipPath id="eye-clip-r">
+                    <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" />
+                  </clipPath>
+                </defs>
+                <g clipPath="url(#eye-clip-r)">
+                  <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" fill="#e0f7fa" />
+                  <g ref={rivaPupilRef} style={{ transition: 'transform 0.4s cubic-bezier(0.175,0.885,0.32,1.275)' }}>
+                    <circle cx="100" cy="60" r="28" fill="#002233" />
+                    <circle
+                      id="riva-glow-el"
+                      cx="100" cy="60" r="10" fill="#00ffff"
+                      style={{ filter: 'drop-shadow(0 0 10px #00ffff)', transition: 'r 0.4s' }}
+                    />
+                  </g>
+                  <rect
+                    ref={rivaLidRef}
+                    width="200" height="120" fill="#1a0d40"
+                    style={{ transform: 'translateY(-100%)', transition: 'transform 0.15s ease-in-out' }}
+                  />
+                </g>
+                <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#00ffff" strokeWidth="2" opacity="0.25" />
+              </svg>
+              <p className="mt-3 text-xs font-bold tracking-[4px] uppercase" style={{ color: '#00ffff', textShadow: '0 0 10px #00ffff55' }}>
+                YOUR SITE
+              </p>
+            </div>
+
+            {/* Competitor eye — red */}
+            <div className="w-64 text-center">
+              <svg viewBox="0 0 200 120" overflow="visible">
+                <defs>
+                  <clipPath id="eye-clip-c">
+                    <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" />
+                  </clipPath>
+                </defs>
+                <g clipPath="url(#eye-clip-c)">
+                  <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" fill="#fbe9e7" />
+                  <g ref={compPupilRef} style={{ transition: 'transform 0.4s cubic-bezier(0.175,0.885,0.32,1.275)' }}>
+                    <circle cx="100" cy="60" r="28" fill="#330000" />
+                    <circle
+                      id="comp-glow-el"
+                      cx="100" cy="60" r="10" fill="#ff3333"
+                      style={{ filter: 'drop-shadow(0 0 10px #ff3333)', transition: 'r 0.4s' }}
+                    />
+                  </g>
+                  <rect
+                    ref={compLidRef}
+                    width="200" height="120" fill="#200a1a"
+                    style={{ transform: 'translateY(-100%)', transition: 'transform 0.15s ease-in-out' }}
+                  />
+                </g>
+                <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#ff3333" strokeWidth="2" opacity="0.25" />
+              </svg>
+              <p className="mt-3 text-xs font-bold tracking-[4px] uppercase" style={{ color: '#ff3333', textShadow: '0 0 10px #ff333355' }}>
+                COMPETITOR
+              </p>
+            </div>
+          </div>
+
+          {/* Magnetic smile CTA */}
+          <div
+            ref={ctaRef}
+            onClick={scrollToInput}
+            className="flex flex-col items-center cursor-pointer select-none"
+            style={{ animation: 'breath 4s infinite ease-in-out' }}
+          >
+            <svg viewBox="0 0 200 60" style={{ width: 220, overflow: 'visible' }}>
+              <path
+                ref={smileRef}
+                d="M20,10 Q100,50 180,10"
+                fill="none"
+                stroke="#c8aaff"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                style={{ transition: 'stroke 0.2s' }}
+              />
+            </svg>
+            <span
+              className="text-xs font-bold tracking-[5px] uppercase mt-2"
+              style={{ color: '#c8aaff', opacity: 0.6 }}
+            >
+              begin
+            </span>
+          </div>
         </div>
 
         {/* Scroll indicator */}
-        <div className="absolute bottom-8 flex flex-col items-center gap-1 opacity-30">
+        <div className="absolute bottom-8 flex flex-col items-center gap-1 opacity-20">
           <div className="w-px h-8 bg-white" style={{ animation: 'pulse 2s infinite' }} />
         </div>
       </section>
@@ -215,100 +218,95 @@ export default function Home() {
       <section
         id="input-section"
         className="min-h-screen flex flex-col items-center justify-center px-8"
-        style={{ background: 'radial-gradient(circle at center, #0a1628 0%, #050a15 70%)' }}
+        style={{ background: 'radial-gradient(ellipse at 50% 50%, #1a1040 0%, #0d0820 50%, #060412 100%)' }}
       >
-        <div className="w-full max-w-2xl">
-          <div className="mb-2 text-xs font-bold tracking-[6px] uppercase" style={{ color: '#00ffff', opacity: 0.6 }}>
-            Step 01
-          </div>
-          <h2 className="text-4xl font-thin tracking-widest uppercase mb-3">
-            Begin Analysis
-          </h2>
-          <p className="text-sm mb-10" style={{ color: 'rgba(255,255,255,0.4)', letterSpacing: '1px' }}>
-            Enter both URLs and Riva will autonomously research both in parallel.
+        <div className="w-full max-w-3xl">
+          <p className="text-sm mb-10" style={{ color: 'rgba(200,170,255,0.35)', letterSpacing: '1px' }}>
+            Paste two product website links and get autonomous competitive analysis reports and a GTM strategy.
           </p>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            {/* Your site — cyan */}
-            <div>
-              <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase" style={{ color: '#00ffff', opacity: 0.6 }}>
-                Your Site
+            {/* Side-by-side inputs */}
+            <div className="flex gap-4">
+              {/* Your site — cyan */}
+              <div className="flex-1">
+                <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase" style={{ color: '#00ffff', opacity: 0.6 }}>
+                  Your Site
+                </div>
+                <div
+                  className="flex items-center border rounded-lg px-4 py-3 gap-3"
+                  style={{ borderColor: 'rgba(0,255,255,0.25)', background: 'rgba(0,255,255,0.04)' }}
+                >
+                  <span style={{ color: '#00ffff', opacity: 0.5, fontSize: 12, letterSpacing: 2 }}>URL</span>
+                  <input
+                    type="text"
+                    value={rivaUrl}
+                    onChange={e => setRivaUrl(e.target.value)}
+                    placeholder="https://yoursite.com"
+                    className="flex-1 bg-transparent outline-none text-sm"
+                    style={{ color: 'white', caretColor: '#00ffff' }}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </div>
               </div>
-              <div
-                className="flex items-center border rounded-lg px-4 py-3 gap-3"
-                style={{ borderColor: 'rgba(0,255,255,0.25)', background: 'rgba(0,255,255,0.04)' }}
-              >
-                <span style={{ color: '#00ffff', opacity: 0.5, fontSize: 12, letterSpacing: 2 }}>URL</span>
-                <input
-                  type="text"
-                  value={rivaUrl}
-                  onChange={e => setRivaUrl(e.target.value)}
-                  placeholder="https://yoursite.com"
-                  className="flex-1 bg-transparent outline-none text-sm"
-                  style={{ color: 'white', caretColor: '#00ffff' }}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
+
+              {/* Competitor — red */}
+              <div className="flex-1">
+                <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase flex items-center gap-2" style={{ color: '#ff3333', opacity: 0.6 }}>
+                  Competing Product
+                  <span className="text-white/20 normal-case tracking-normal font-normal">(optional)</span>
+                </div>
+                <div
+                  className="flex items-center border rounded-lg px-4 py-3 gap-3"
+                  style={{ borderColor: 'rgba(255,51,51,0.25)', background: 'rgba(255,51,51,0.04)' }}
+                >
+                  <span style={{ color: '#ff3333', opacity: 0.5, fontSize: 12, letterSpacing: 2 }}>URL</span>
+                  <input
+                    type="text"
+                    value={compUrl}
+                    onChange={e => setCompUrl(e.target.value)}
+                    placeholder="https://competitor.com"
+                    className="flex-1 bg-transparent outline-none text-sm"
+                    style={{ color: 'white', caretColor: '#ff3333' }}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </div>
               </div>
             </div>
 
-            {/* Competitor — red */}
-            <div>
-              <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase flex items-center gap-2" style={{ color: '#ff3333', opacity: 0.6 }}>
-                Competitor
-                <span className="text-white/20 normal-case tracking-normal font-normal">(optional)</span>
-              </div>
-              <div
-                className="flex items-center border rounded-lg px-4 py-3 gap-3"
-                style={{ borderColor: 'rgba(255,51,51,0.25)', background: 'rgba(255,51,51,0.04)' }}
+            <div className="flex justify-center mt-2">
+              <button
+                type="submit"
+                className="px-8 py-2.5 rounded-lg text-sm font-bold tracking-[4px] uppercase transition-all duration-200 flex items-center gap-3"
+                style={{
+                  background: 'linear-gradient(135deg, rgba(160,100,255,0.15) 0%, rgba(160,100,255,0.05) 100%)',
+                  border: '1px solid rgba(160,100,255,0.4)',
+                  color: '#c8aaff',
+                  boxShadow: '0 0 20px rgba(160,100,255,0.1)',
+                  opacity: rivaUrl.trim() || compUrl.trim() ? 1 : 0.4,
+                }}
+                onMouseEnter={e => {
+                  (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 30px rgba(160,100,255,0.3)';
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(160,100,255,0.8)';
+                }}
+                onMouseLeave={e => {
+                  (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 20px rgba(160,100,255,0.1)';
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(160,100,255,0.4)';
+                }}
               >
-                <span style={{ color: '#ff3333', opacity: 0.5, fontSize: 12, letterSpacing: 2 }}>URL</span>
-                <input
-                  type="text"
-                  value={compUrl}
-                  onChange={e => setCompUrl(e.target.value)}
-                  placeholder="https://competitor.com"
-                  className="flex-1 bg-transparent outline-none text-sm"
-                  style={{ color: 'white', caretColor: '#ff3333' }}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </div>
+                <span style={{ fontSize: 12}}>→</span>
+              </button>
             </div>
-
-            <button
-              type="submit"
-              className="w-full py-3 rounded-lg text-sm font-bold tracking-[4px] uppercase transition-all duration-200 mt-2"
-              style={{
-                background: 'linear-gradient(135deg, rgba(0,255,255,0.15) 0%, rgba(0,255,255,0.05) 100%)',
-                border: '1px solid rgba(0,255,255,0.4)',
-                color: '#00ffff',
-                boxShadow: '0 0 20px rgba(0,255,255,0.1)',
-                opacity: rivaUrl.trim() || compUrl.trim() ? 1 : 0.4,
-              }}
-              onMouseEnter={e => {
-                (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 30px rgba(0,255,255,0.3)';
-                (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(0,255,255,0.8)';
-              }}
-              onMouseLeave={e => {
-                (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 20px rgba(0,255,255,0.1)';
-                (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(0,255,255,0.4)';
-              }}
-            >
-              Initiate Dual Analysis
-            </button>
           </form>
-
-          <p className="mt-6 text-xs" style={{ color: 'rgba(255,255,255,0.2)', letterSpacing: '1px' }}>
-            Both agents run simultaneously. You can intervene via the live preview on either panel.
-          </p>
         </div>
       </section>
 
       <style>{`
         @keyframes breath {
-          0%, 100% { transform: scale(1); filter: drop-shadow(0 0 5px rgba(0,255,255,0.2)); }
-          50%       { transform: scale(1.05); filter: drop-shadow(0 0 15px rgba(0,255,255,0.5)); }
+          0%, 100% { transform: scale(1); filter: drop-shadow(0 0 5px rgba(160,100,255,0.2)); }
+          50%       { transform: scale(1.05); filter: drop-shadow(0 0 15px rgba(160,100,255,0.5)); }
         }
       `}</style>
     </main>

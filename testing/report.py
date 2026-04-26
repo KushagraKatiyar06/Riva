@@ -400,7 +400,7 @@ def render_html(intel: dict, images: dict) -> str:
             name  = intel["domains"][d]["display_name"]
             color = domain_colors[d]
             pills = "".join(
-                f'<span class="pill" style="background:{color}18;color:{color};">{str(i)[:60]}</span>'
+                f'<span class="pill" style="background:{color}18;color:#1a1f2e;border:1px solid {color}55;">{str(i)[:60]}</span>'
                 for i in items[:8]
             )
             unique_sections += (
@@ -421,6 +421,7 @@ def render_html(intel: dict, images: dict) -> str:
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<base target="_blank">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Riva Intel — {title_str}</title>
 <style>
@@ -453,7 +454,7 @@ def render_html(intel: dict, images: dict) -> str:
   .domain-header {{ display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }}
   .logo-img {{ width: 36px; height: 36px; object-fit: contain; border-radius: 6px; flex-shrink: 0; }}
   .domain-meta h2 {{ font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-  .tagline {{ font-size: 11px; color: #666; margin-top: 2px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }}
+  .tagline {{ font-size: 11px; color: #666; margin-top: 2px; line-height: 1.5; }}
   .audience-badge {{
     display: inline-block; border-radius: 20px; padding: 2px 8px;
     font-size: 10px; font-weight: 600; margin-top: 4px;
@@ -478,9 +479,9 @@ def render_html(intel: dict, images: dict) -> str:
   .tier-name  {{ font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }}
   .tier-price {{ font-size: 14px; font-weight: 800; margin: 3px 0; color: #1a1f2e; }}
   .tier-features {{ padding-left: 10px; font-size: 10px; color: #666; }}
-  .tier-features li {{ margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .tier-features li {{ margin-bottom: 2px; line-height: 1.4; }}
   .feature-list {{ padding-left: 12px; }}
-  .feature-list li {{ margin-bottom: 3px; font-size: 11.5px; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .feature-list li {{ margin-bottom: 3px; font-size: 11.5px; color: #333; line-height: 1.45; }}
   .two-col {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }}
   .comparison-section {{
     background: white; border-radius: 12px; padding: 18px;
@@ -506,7 +507,7 @@ def render_html(intel: dict, images: dict) -> str:
     border-radius: 0 8px 8px 0; padding: 10px 12px;
   }}
   .verdict-label {{ font-size: 9px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: #aaa; margin-bottom: 4px; }}
-  .verdict-text  {{ font-size: 12px; color: #333; line-height: 1.6; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }}
+  .verdict-text  {{ font-size: 12px; color: #333; line-height: 1.6; }}
   .recommendation {{
     background: linear-gradient(135deg, #0a1628, #0d2040);
     color: white; border-radius: 12px; padding: 18px 22px; margin-top: 4px;
@@ -514,7 +515,7 @@ def render_html(intel: dict, images: dict) -> str:
     border-image: linear-gradient(to right, {c1}, {c2}) 1;
   }}
   .rec-label {{ font-size: 9px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase; color: {c1}; margin-bottom: 8px; }}
-  .rec-text  {{ font-size: 13px; line-height: 1.7; color: #cde; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }}
+  .rec-text  {{ font-size: 13px; line-height: 1.7; color: #cde; }}
   .report-footer {{ margin-top: 18px; text-align: center; font-size: 10px; color: #bbb; letter-spacing: 1px; }}
   @media print {{
     body {{ background: white; }}
