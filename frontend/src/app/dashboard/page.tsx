@@ -561,8 +561,20 @@ function InlineChatPanel({
 // ---------------------------------------------------------------------------
 type ReportEntry = { type: 'pdf' | 'pptx'; url: string; previewUrl: string; filename: string };
 
+function downloadBlob(url: string, filename: string) {
+  fetch(url)
+    .then(r => r.blob())
+    .then(blob => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+}
+
 function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
-  const [minimized, setMinimized] = useState(false);
+  const [minimized, setMinimized] = useState(true);
 
   if (reports.length === 0) return null;
 
@@ -571,8 +583,8 @@ function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
       style={{ border: '1px solid rgba(149,128,200,0.2)', background: '#0a0820',
         marginBottom: 12, transition: 'all 0.25s ease' }}>
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b"
-        style={{ borderColor: 'rgba(149,128,200,0.12)', background: 'rgba(0,0,0,0.3)' }}>
+      <div className="flex items-center justify-between px-3 py-2"
+        style={{ background: 'rgba(0,0,0,0.3)', borderBottom: minimized ? 'none' : '1px solid rgba(149,128,200,0.12)' }}>
         <div className="flex items-center gap-3">
           <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#9580c8',
             fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase' }}>
@@ -606,21 +618,23 @@ function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
                     {r.type === 'pdf' ? 'one-pager report' : 'powerpoint deck'}
                   </span>
                   <div className="flex items-center gap-2">
-                    <a href={previewUrl} target="_blank" rel="noreferrer"
-                      className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
-                      style={{ background: 'rgba(149,128,200,0.08)', color: '#9580c8',
-                        border: '1px solid rgba(149,128,200,0.18)', fontSize: 8,
-                        fontFamily: "'DM Sans', sans-serif", textDecoration: 'none' }}>
-                      open tab
-                    </a>
-                    <a href={fullUrl} download={r.filename}
+                    {r.type === 'pdf' && (
+                      <a href={previewUrl} target="_blank" rel="noreferrer"
+                        className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
+                        style={{ background: 'rgba(149,128,200,0.08)', color: '#9580c8',
+                          border: '1px solid rgba(149,128,200,0.18)', fontSize: 8,
+                          fontFamily: "'DM Sans', sans-serif", textDecoration: 'none' }}>
+                        open tab
+                      </a>
+                    )}
+                    <button onClick={() => downloadBlob(fullUrl, r.filename)}
                       className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
                       style={{ background: 'rgba(109,192,138,0.08)', color: '#6dc08a',
                         border: '1px solid rgba(109,192,138,0.2)', fontSize: 8,
-                        fontFamily: "'DM Sans', sans-serif", textDecoration: 'none' }}>
+                        fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
                       <Download size={8} />
                       download
-                    </a>
+                    </button>
                   </div>
                 </div>
                 {/* Preview iframe */}
@@ -912,8 +926,9 @@ function DashboardContent() {
         </div>
 
         {/* ── Main ── */}
-        <div className="flex-1 flex flex-col min-h-0 px-3">
-          <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 min-h-0 px-3 overflow-y-auto flex flex-col">
+          {/* Active area — fixed height so browser panels are never compressed by the report section below */}
+          <div className="flex flex-col shrink-0" style={{ height: 'calc(100vh - 88px)' }}>
 
             {/* Mini logs row */}
             {(rivaUrl || compUrl) && (
@@ -970,27 +985,28 @@ function DashboardContent() {
                 </div>
               )}
             </div>
+
+            {/* ── Bottom: inference logs + chat ── */}
+            <div className="flex flex-col sm:flex-row shrink-0 rounded-lg overflow-hidden mb-3"
+              style={{
+                height: bottomExpanded ? 400 : 220,
+                transition: 'height 0.25s ease',
+                border: '1px solid rgba(255,255,255,0.1)',
+              }}>
+              <div className="flex-1 min-w-0">
+                <InferenceLogPanel logs={pipelineLogs} status={pipelineStatus}
+                  hasReports={reports.length > 0}
+                  bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <InlineChatPanel messages={chatMessages} onSend={sendChat}
+                  pipelineReady={pipelineReady} pipelineStatus={pipelineStatus}
+                  bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
+              </div>
+            </div>
           </div>
 
-          {/* ── Bottom: inference logs + chat ── */}
-          <div className="flex flex-col sm:flex-row shrink-0 rounded-lg overflow-hidden mb-3"
-            style={{
-              height: bottomExpanded ? 400 : 220,
-              transition: 'height 0.25s ease',
-              border: '1px solid rgba(255,255,255,0.1)',
-            }}>
-            <div className="flex-1 min-w-0">
-              <InferenceLogPanel logs={pipelineLogs} status={pipelineStatus}
-                hasReports={reports.length > 0}
-                bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <InlineChatPanel messages={chatMessages} onSend={sendChat}
-                pipelineReady={pipelineReady} pipelineStatus={pipelineStatus}
-                bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
-            </div>
-          </div>
-
+          {/* Report section sits below active area — expands into scrollable space */}
           {reports.length > 0 && (
             <ReportPreviewSection reports={reports} />
           )}
