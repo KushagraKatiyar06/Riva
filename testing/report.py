@@ -55,12 +55,33 @@ def embed(text: str) -> list:
 
 def vectorize_query(question: str, top_k: int = 20, domain: str = None) -> list:
     url     = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/vectorize/v2/indexes/{INDEX_NAME}/query"
-    payload = {"vector": embed(question), "topK": top_k, "returnMetadata": "all"}
-    resp    = requests.post(url, headers=CF_HEADERS, json=payload, timeout=20)
-    resp.raise_for_status()
-    matches = resp.json()["result"].get("matches", [])
+    vector  = embed(question)
+    payload = {"vector": vector, "topK": top_k, "returnMetadata": "all"}
     if domain:
-        matches = [m for m in matches if m.get("metadata", {}).get("domain") == domain]
+        payload["filter"] = {"domain": {"$eq": domain}}
+    try:
+        resp = requests.post(url, headers=CF_HEADERS, json=payload, timeout=20)
+        resp.raise_for_status()
+        result = resp.json().get("result") or {}
+        matches = result.get("matches", [])
+        # If server-side filter returned nothing, fall back to client-side filtering
+        # (happens when the index doesn't have metadata indexing enabled for 'domain')
+        if domain and not matches:
+            fallback_payload = {"vector": vector, "topK": 20, "returnMetadata": "all"}
+            resp2   = requests.post(url, headers=CF_HEADERS, json=fallback_payload, timeout=20)
+            resp2.raise_for_status()
+            all_matches = (resp2.json().get("result") or {}).get("matches", [])
+            matches = [m for m in all_matches if m.get("metadata", {}).get("domain") == domain]
+    except requests.HTTPError:
+        # Filter may have failed (e.g. metadata not indexed) — retry without filter
+        if domain:
+            fallback_payload = {"vector": vector, "topK": 20, "returnMetadata": "all"}
+            resp2   = requests.post(url, headers=CF_HEADERS, json=fallback_payload, timeout=20)
+            resp2.raise_for_status()
+            all_matches = (resp2.json().get("result") or {}).get("matches", [])
+            matches = [m for m in all_matches if m.get("metadata", {}).get("domain") == domain]
+        else:
+            raise
     return matches
 
 

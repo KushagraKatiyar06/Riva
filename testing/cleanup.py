@@ -100,7 +100,22 @@ def cf_create_index() -> bool:
     url  = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/vectorize/v2/indexes"
     body = {"name": INDEX_NAME, "config": {"dimensions": DIMENSIONS, "metric": METRIC}}
     resp = requests.post(url, headers=HEADERS, json=body, timeout=20)
-    return resp.json().get("success", False)
+    if not resp.json().get("success", False):
+        return False
+    # Enable metadata indexing for 'domain' so server-side filtering works
+    cf_enable_domain_metadata_index()
+    return True
+
+
+def cf_enable_domain_metadata_index() -> bool:
+    """Enable metadata indexing for the 'domain' field (required for server-side filtering)."""
+    url  = (
+        f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}"
+        f"/vectorize/v2/indexes/{INDEX_NAME}/metadata-index/create"
+    )
+    resp = requests.post(url, headers=HEADERS, json={"propertyName": "domain", "indexType": "string"}, timeout=20)
+    data = resp.json()
+    return data.get("success", False)
 
 
 def cf_index_exists() -> bool:
@@ -186,6 +201,7 @@ def main():
     print("2  Clean local extracts only")
     print("3  Clean Vectorize vectors only  (wipe + recreate index)")
     print("4  Clean by domain")
+    print("5  Enable domain metadata indexing  (fixes empty Supabase/secondary domain in reports)")
     print("0  Exit\n")
 
     choice = input("Choice: ").strip()
@@ -202,6 +218,13 @@ def main():
     elif choice == "3":
         if confirm("  ⚠️  Wipe and recreate the entire Vectorize index?"):
             clean_vectors_all()
+
+    elif choice == "5":
+        print("  Enabling metadata indexing for 'domain' field...", end=" ", flush=True)
+        if cf_enable_domain_metadata_index():
+            print("✅ done.")
+        else:
+            print("❌ failed (may already be enabled, or check your API token permissions).")
 
     elif choice == "4":
         if not domains:

@@ -1379,10 +1379,14 @@ async def pipeline_websocket(
                 log(f"  HTML generated ({len(html):,} chars)", "info")
 
                 log("Step 4/5 — Saving HTML to disk...", "info")
-                slug = "_vs_".join(
-                    re.sub(r'[^a-z0-9-]', '', intel["domains"][d]["display_name"].lower().replace(" ", "-"))
-                    for d in all_domains
-                )
+                def _domain_slug(d: str) -> str:
+                    name = intel["domains"][d].get("display_name", "")
+                    slug_part = re.sub(r'[^a-z0-9-]', '', name.lower().replace(" ", "-"))
+                    # Fall back to the domain name if display_name is empty or a placeholder
+                    if not slug_part or slug_part in ("short-brand-name", ""):
+                        slug_part = re.sub(r'[^a-z0-9-]', '', d.lower().replace(".", "-"))
+                    return slug_part
+                slug = "_vs_".join(_domain_slug(d) for d in all_domains)
                 ts        = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
                 html_path = REPORTS_DIR / f"riva_report_{slug}_{ts}.html"
                 html_path.write_text(html, encoding="utf-8")
