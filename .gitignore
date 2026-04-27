@@ -50,7 +50,11 @@ build/
 *.log
 logs/
 
+# Wrangler local cache
+.wrangler/
+
 # Docs / notes that shouldn't be in the repo
 services.txt
 deployment.md
 explanation.txt
+deploy_frontend.md
