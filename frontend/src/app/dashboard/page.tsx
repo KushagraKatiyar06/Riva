@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useMemo, Suspense } from 'react';
+import { useEffect, useRef, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Play, Pause, ArrowRight, Send, Download, Maximize2, Minimize2 } from 'lucide-react';
 
@@ -38,22 +38,16 @@ function now() {
 }
 
 // ---------------------------------------------------------------------------
-// SmallEye — animated eye synced to agent state
+// SmallEye
 // ---------------------------------------------------------------------------
 function SmallEye({ color, bgFill, darkFill, lidFill, glowId, size = 44, agentState = 'info' }: {
-  color: string;
-  bgFill: string;
-  darkFill: string;
-  lidFill: string;
-  glowId: string;
-  size?: number;
-  agentState?: string;
+  color: string; bgFill: string; darkFill: string; lidFill: string;
+  glowId: string; size?: number; agentState?: string;
 }) {
   const pupilRef = useRef<SVGGElement>(null);
   const lidRef   = useRef<SVGRectElement>(null);
   const modeRef  = useRef<string>('idle');
 
-  // Sync mode to agent state
   useEffect(() => {
     if (['navigating', 'scanning', 'hovering', 'clicking'].includes(agentState)) {
       modeRef.current = 'thinking';
@@ -61,7 +55,6 @@ function SmallEye({ color, bgFill, darkFill, lidFill, glowId, size = 44, agentSt
       modeRef.current = 'found';
     } else if (agentState === 'complete') {
       modeRef.current = 'complete';
-      // Rapid blink sequence then calm
       let count = 0;
       const rapidBlink = () => {
         if (count >= 8 || !lidRef.current) return;
@@ -78,52 +71,42 @@ function SmallEye({ color, bgFill, darkFill, lidFill, glowId, size = 44, agentSt
     }
   }, [agentState]);
 
-  // Animation loop
   useEffect(() => {
     let alive = true;
-
     function blink() {
       if (!lidRef.current) return;
       lidRef.current.style.transform = 'translateY(0%)';
       setTimeout(() => { if (lidRef.current) lidRef.current.style.transform = 'translateY(-100%)'; }, 130);
     }
-
     function setGlow(r: number) {
       const el = document.getElementById(glowId) as SVGCircleElement | null;
       if (el) el.setAttribute('r', String(r));
     }
-
     function loop() {
       if (!alive || !pupilRef.current) return;
       const mode = modeRef.current;
-
       if (mode === 'thinking') {
-        // Fast erratic looking-around
         const x = (Math.random() - 0.5) * 46;
         const y = (Math.random() - 0.5) * 24;
         pupilRef.current.style.transform = `translate(${x}px, ${y}px)`;
         setGlow(Math.random() > 0.4 ? 4 : 2.5);
         setTimeout(loop, Math.random() * 350 + 120);
       } else if (mode === 'found') {
-        // Dilated, slow gentle drift
         const x = (Math.random() - 0.5) * 8;
         const y = (Math.random() - 0.5) * 5;
         pupilRef.current.style.transform = `translate(${x}px, ${y}px)`;
-        setGlow(11); // big dilation
+        setGlow(11);
         setTimeout(loop, Math.random() * 2500 + 1800);
       } else if (mode === 'complete') {
-        // Centered, small pupil, very slow
         pupilRef.current.style.transform = 'translate(0px, 0px)';
         setGlow(3);
         setTimeout(loop, 5000);
       } else if (mode === 'alert') {
-        // Darting left-right
         const x = (Math.random() - 0.5) * 22;
         pupilRef.current.style.transform = `translate(${x}px, 2px)`;
         setGlow(3);
         setTimeout(loop, Math.random() * 250 + 150);
       } else {
-        // Idle: gentle drifting
         const x = (Math.random() - 0.5) * 28;
         const y = (Math.random() - 0.5) * 14;
         pupilRef.current.style.transform = `translate(${x}px, ${y}px)`;
@@ -132,7 +115,6 @@ function SmallEye({ color, bgFill, darkFill, lidFill, glowId, size = 44, agentSt
         setTimeout(loop, Math.random() * 2400 + 900);
       }
     }
-
     loop();
     return () => { alive = false; };
   }, [glowId]);
@@ -160,29 +142,19 @@ function SmallEye({ color, bgFill, darkFill, lidFill, glowId, size = 44, agentSt
 }
 
 // ---------------------------------------------------------------------------
-// MiniLog — eye in header, synced to agent, shared expand state
+// MiniLog
 // ---------------------------------------------------------------------------
 function MiniLog({
   thoughts, color, accentColor, domain, eyeBgFill, eyeDarkFill, eyeLidFill, glowId,
   expanded, onToggle,
 }: {
-  thoughts: Thought[];
-  color: string;
-  accentColor: string;
-  domain: string;
-  eyeBgFill: string;
-  eyeDarkFill: string;
-  eyeLidFill: string;
-  glowId: string;
-  expanded: boolean;
-  onToggle: () => void;
+  thoughts: Thought[]; color: string; accentColor: string; domain: string;
+  eyeBgFill: string; eyeDarkFill: string; eyeLidFill: string; glowId: string;
+  expanded: boolean; onToggle: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
-    if (expanded && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    if (expanded && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [thoughts, expanded]);
 
   const lastThought = thoughts[thoughts.length - 1];
@@ -190,17 +162,9 @@ function MiniLog({
 
   return (
     <div className="shrink-0 overflow-hidden"
-      style={{
-        height: expanded ? 200 : 54,
-        transition: 'height 0.25s ease',
-        background: 'rgba(0,0,0,0.28)',
-      }}>
+      style={{ height: expanded ? 200 : 54, transition: 'height 0.25s ease', background: 'rgba(0,0,0,0.28)' }}>
       <div className="flex items-center justify-between px-2.5 shrink-0"
-        style={{
-          height: 54,
-          background: 'rgba(0,0,0,0.22)',
-          borderBottom: expanded ? `1px solid ${accentColor}22` : 'none',
-        }}>
+        style={{ height: 54, background: 'rgba(0,0,0,0.22)', borderBottom: expanded ? `1px solid ${accentColor}22` : 'none' }}>
         <div className="flex items-center gap-3">
           <SmallEye color={color} bgFill={eyeBgFill} darkFill={eyeDarkFill}
             lidFill={eyeLidFill} glowId={glowId} size={52} agentState={agentState} />
@@ -216,26 +180,16 @@ function MiniLog({
           {expanded ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
         </button>
       </div>
-
       {expanded && (
         <div ref={scrollRef} className="overflow-y-auto px-3 py-2 space-y-0.5"
           style={{ height: 146, fontFamily: "'Fira Code', monospace" }}>
-          {thoughts.length === 0 && (
-            <div style={{ fontSize: 10, color: '#3a3a4e' }}>waiting...</div>
-          )}
+          {thoughts.length === 0 && <div style={{ fontSize: 10, color: '#3a3a4e' }}>waiting...</div>}
           {thoughts.map((t, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, fontSize: 10, lineHeight: '19px' }}>
               <span style={{ flexShrink: 0, color: 'rgba(255,255,255,0.13)' }}>[{t.ts}]</span>
               <span style={{ color: STATE_COLORS[t.state] ?? '#9a9ab0' }}>{t.text}</span>
             </div>
           ))}
-        </div>
-      )}
-
-      {!expanded && lastThought && (
-        <div style={{ padding: '0 12px', display: 'flex', gap: 8, fontSize: 10,
-          lineHeight: '19px', fontFamily: "'Fira Code', monospace",
-          position: 'absolute', bottom: 0, left: 0, right: 0, height: 0, overflow: 'visible' }}>
         </div>
       )}
     </div>
@@ -247,7 +201,7 @@ function MiniLog({
 // ---------------------------------------------------------------------------
 function BrowserPanel({
   label, frameSrc, active, isPaused, isComplete, wsActive,
-  stuckMilestone, canSkip, onTogglePause, onSkip, onInteraction, onGoto, onRestart,
+  stuckMilestone, canSkip, dimmed, onTogglePause, onSkip, onInteraction, onGoto, onRestart,
 }: any) {
   const [manualUrl, setManualUrl] = useState('');
 
@@ -263,8 +217,11 @@ function BrowserPanel({
     setManualUrl('');
   }
 
+  const pauseButtonPulsing = canSkip && !isComplete && !isPaused;
+
   return (
     <div className="flex flex-col flex-1 overflow-hidden" style={{ background: 'rgba(0,0,0,0.35)' }}>
+      {/* toolbar */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-white/5 shrink-0"
         style={{ background: 'rgba(0,0,0,0.22)' }}>
         {isComplete ? (
@@ -276,29 +233,37 @@ function BrowserPanel({
           </div>
         ) : (
           <>
+            {/* Pause button — pulses when skip is available to hint user */}
             <button onClick={onTogglePause}
               className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
               style={{
                 background: isPaused ? 'rgba(109,192,138,0.15)' : 'rgba(255,255,255,0.92)',
                 color:      isPaused ? '#6dc08a' : '#140e28',
-                border:     `1px solid ${isPaused ? 'rgba(109,192,138,0.5)' : 'rgba(255,255,255,0.8)'}`,
+                border:     isPaused
+                  ? '1px solid rgba(109,192,138,0.5)'
+                  : pauseButtonPulsing
+                    ? '1px solid rgba(109,192,138,0.8)'
+                    : '1px solid rgba(255,255,255,0.8)',
                 fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
                 fontFamily: "'DM Sans', sans-serif",
+                animation: pauseButtonPulsing ? 'pulseSkipHint 2s ease-in-out infinite' : 'none',
               }}>
               {isPaused ? <Play size={9} fill="currentColor" /> : <Pause size={9} fill="currentColor" />}
               {isPaused ? 'resume' : 'pause'}
             </button>
+            {/* Skip button */}
             <button onClick={canSkip ? onSkip : undefined}
               className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
               disabled={!canSkip}
               style={{
-                background: 'rgba(255,255,255,0.92)',
-                color: '#140e28',
-                border: '1px solid rgba(255,255,255,0.8)',
+                background: canSkip ? 'rgba(109,192,138,0.15)' : 'rgba(255,255,255,0.92)',
+                color:      canSkip ? '#6dc08a' : '#140e28',
+                border:     canSkip ? '1px solid rgba(109,192,138,0.5)' : '1px solid rgba(255,255,255,0.8)',
                 fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
                 fontFamily: "'DM Sans', sans-serif",
                 opacity: canSkip ? 1 : 0.35,
                 cursor: canSkip ? 'pointer' : 'not-allowed',
+                animation: canSkip ? 'pulseSkipHint 2s ease-in-out infinite 0.5s' : 'none',
               }}>
               <ArrowRight size={9} />
               skip
@@ -314,8 +279,7 @@ function BrowserPanel({
                 : '1px solid rgba(255,255,255,0.1)',
               color: 'rgba(255,255,255,0.9)',
               fontSize: 9, fontFamily: "'Fira Code', monospace",
-              boxShadow: stuckMilestone && !isComplete
-                ? '0 0 8px rgba(200,168,74,0.25)' : 'none',
+              boxShadow: stuckMilestone && !isComplete ? '0 0 8px rgba(200,168,74,0.25)' : 'none',
             }}
             placeholder={stuckMilestone && !isComplete
               ? `paste the ${stuckMilestone} url here and press enter...`
@@ -333,12 +297,16 @@ function BrowserPanel({
         </div>
       </div>
 
+      {/* viewport */}
       <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden"
         onClick={handleClick}
         style={{ cursor: active && frameSrc && !isComplete ? 'crosshair' : 'default' }}>
+
         {frameSrc ? (
           <img src={frameSrc} className="w-full h-full object-contain pointer-events-none select-none"
-            style={{ opacity: isComplete ? 0.35 : 1, filter: isComplete ? 'grayscale(0.5)' : 'none' }}
+            style={{ opacity: isComplete ? 0.35 : dimmed ? 0.25 : 1,
+              filter: isComplete ? 'grayscale(0.5)' : dimmed ? 'grayscale(0.6) brightness(0.5)' : 'none',
+              transition: 'opacity 0.4s ease, filter 0.4s ease' }}
             alt="preview" />
         ) : (
           <div style={{ color: 'rgba(255,255,255,0.06)', fontSize: 10, letterSpacing: '3px',
@@ -346,11 +314,19 @@ function BrowserPanel({
             {label} offline
           </div>
         )}
+
+        {/* dim overlay when other agent is stuck */}
+        {dimmed && !isComplete && (
+          <div className="absolute inset-0 pointer-events-none"
+            style={{ background: 'rgba(5,9,18,0.55)', transition: 'opacity 0.4s ease' }} />
+        )}
+
         {isPaused && !isComplete && (
           <div className="absolute inset-0 pointer-events-none"
             style={{ border: '2px solid rgba(109,192,138,0.15)',
               boxShadow: 'inset 0 0 60px rgba(109,192,138,0.04)' }} />
         )}
+
         {stuckMilestone && !isComplete && (
           <div className="absolute bottom-0 left-0 right-0 px-4 py-4 flex flex-col gap-2"
             style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.95) 80%, transparent)' }}>
@@ -366,6 +342,7 @@ function BrowserPanel({
             </div>
           </div>
         )}
+
         {isComplete && frameSrc && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="flex flex-col items-center gap-2 px-6 py-4 rounded-xl"
@@ -391,11 +368,8 @@ function BrowserPanel({
 function InferenceLogPanel({
   logs, status, hasReports, bottomExpanded, onToggleBottom,
 }: {
-  logs: PipelineLog[];
-  status: string;
-  hasReports: boolean;
-  bottomExpanded: boolean;
-  onToggleBottom: () => void;
+  logs: PipelineLog[]; status: string; hasReports: boolean;
+  bottomExpanded: boolean; onToggleBottom: () => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
@@ -457,21 +431,16 @@ function InferenceLogPanel({
 function InlineChatPanel({
   messages, onSend, pipelineReady, pipelineStatus, bottomExpanded, onToggleBottom,
 }: {
-  messages: ChatMsg[];
-  onSend: (text: string) => void;
-  pipelineReady: boolean;
-  pipelineStatus: string;
-  bottomExpanded: boolean;
-  onToggleBottom: () => void;
+  messages: ChatMsg[]; onSend: (text: string) => void;
+  pipelineReady: boolean; pipelineStatus: string;
+  bottomExpanded: boolean; onToggleBottom: () => void;
 }) {
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  // Map pipeline status to eye state
   const chatEyeState = pipelineStatus === 'vectorizing' ? 'scanning'
-    : pipelineStatus === 'ready' ? 'found'
-    : 'info';
+    : pipelineStatus === 'ready' ? 'found' : 'info';
 
   function send() {
     if (!input.trim() || !pipelineReady) return;
@@ -496,7 +465,6 @@ function InlineChatPanel({
           {bottomExpanded ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
         </button>
       </div>
-
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2.5 min-h-0"
         style={{ fontFamily: "'Fira Code', monospace" }}>
         {messages.length === 0 && (
@@ -525,7 +493,6 @@ function InlineChatPanel({
         ))}
         <div ref={bottomRef} />
       </div>
-
       <div className="px-3 py-2 border-t border-white/5 shrink-0">
         {!pipelineReady && (
           <div style={{ fontSize: 9, color: '#3a3a4e', marginBottom: 5, fontFamily: "'DM Sans', sans-serif" }}>
@@ -557,7 +524,7 @@ function InlineChatPanel({
 }
 
 // ---------------------------------------------------------------------------
-// Report modal
+// Report section
 // ---------------------------------------------------------------------------
 type ReportEntry = { type: 'pdf' | 'pptx'; url: string; previewUrl: string; filename: string };
 
@@ -568,8 +535,10 @@ function downloadBlob(url: string, filename: string) {
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = filename;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(a.href);
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 100);
     });
 }
 
@@ -579,9 +548,17 @@ function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
   if (reports.length === 0) return null;
 
   return (
-    <div className="shrink-0 rounded-lg overflow-hidden"
-      style={{ border: '1px solid rgba(149,128,200,0.2)', background: '#0a0820',
-        marginBottom: 12, transition: 'all 0.25s ease' }}>
+    // Constrained width + centered so iframes are narrower — shows more PDF content
+    <div className="shrink-0 rounded-lg overflow-hidden mx-auto"
+      style={{
+        border: '1px solid rgba(149,128,200,0.2)',
+        background: '#0a0820',
+        marginBottom: 12,
+        marginTop: 4,
+        width: '68%',
+        minWidth: 520,
+        transition: 'all 0.25s ease',
+      }}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2"
         style={{ background: 'rgba(0,0,0,0.3)', borderBottom: minimized ? 'none' : '1px solid rgba(149,128,200,0.12)' }}>
@@ -595,8 +572,7 @@ function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
             {reports.length} ready
           </span>
         </div>
-        <button onClick={() => setMinimized(v => !v)}
-          className="p-1 transition-colors"
+        <button onClick={() => setMinimized(v => !v)} className="p1 transition-colors"
           style={{ color: 'rgba(255,255,255,0.3)' }}>
           {minimized ? <Maximize2 size={11} /> : <Minimize2 size={11} />}
         </button>
@@ -610,7 +586,6 @@ function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
             return (
               <div key={i} className="flex flex-col flex-1 min-w-0"
                 style={{ borderRight: i < reports.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
-                {/* Per-report header */}
                 <div className="flex items-center justify-between px-3 py-1.5 shrink-0"
                   style={{ background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                   <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)',
@@ -637,7 +612,6 @@ function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
                     </button>
                   </div>
                 </div>
-                {/* Preview iframe */}
                 <iframe
                   src={previewUrl}
                   className="flex-1 w-full border-0"
@@ -672,62 +646,66 @@ function DashboardContent() {
 
   const storageKey = `riva-session:${rivaUrl}|${compUrl}`;
 
-  const sessionIdRef = useRef(crypto.randomUUID());
+  const sessionIdRef    = useRef(crypto.randomUUID());
+  // Ref checked synchronously in WS effects before state update propagates
+  const isRestoringRef  = useRef(false);
+  // storageChecked gates WS connections — prevents connecting before we know if we're restoring
+  const [storageChecked, setStorageChecked] = useState(false);
 
-  // All state starts at server-safe defaults (no sessionStorage on server).
-  // Saved session is applied in a useEffect after hydration to avoid mismatches.
-  const [rivaThoughts,       setRivaThoughts]       = useState<Thought[]>([]);
-  const [compThoughts,       setCompThoughts]       = useState<Thought[]>([]);
-  const [rivaFrame,          setRivaFrame]          = useState('');
-  const [compFrame,          setCompFrame]          = useState('');
-  const [rivaPaused,         setRivaPaused]         = useState(false);
-  const [compPaused,         setCompPaused]         = useState(false);
-  const [rivaComplete,       setRivaComplete]       = useState(false);
-  const [compComplete,       setCompComplete]       = useState(false);
-  const [isRestoring,        setIsRestoring]        = useState(false);
-  const [rivaWsState,        setRivaWsState]        = useState<'connecting'|'open'|'closed'>('connecting');
-  const [compWsState,        setCompWsState]        = useState<'connecting'|'open'|'closed'>('connecting');
+  const [rivaThoughts,  setRivaThoughts]  = useState<Thought[]>([]);
+  const [compThoughts,  setCompThoughts]  = useState<Thought[]>([]);
+  const [rivaFrame,     setRivaFrame]     = useState('');
+  const [compFrame,     setCompFrame]     = useState('');
+  const [rivaPaused,    setRivaPaused]    = useState(false);
+  const [compPaused,    setCompPaused]    = useState(false);
+  const [rivaComplete,  setRivaComplete]  = useState(false);
+  const [compComplete,  setCompComplete]  = useState(false);
+  const [isRestoring,   setIsRestoring]   = useState(false);
+  const [rivaWsState,   setRivaWsState]   = useState<'connecting'|'open'|'closed'>('connecting');
+  const [compWsState,   setCompWsState]   = useState<'connecting'|'open'|'closed'>('connecting');
 
-  // Apply saved session after mount (client-only)
+  // Check sessionStorage FIRST. Sets isRestoringRef synchronously so WS effects
+  // read the correct value when storageChecked flips to true.
   useEffect(() => {
-    if (!rivaUrl && !compUrl) return;
-    try {
-      const raw = sessionStorage.getItem(storageKey);
-      if (!raw) return;
-      const saved = JSON.parse(raw);
-      if (saved.sessionId) sessionIdRef.current = saved.sessionId;
-      if (saved.rivaFrame)      setRivaFrame(saved.rivaFrame);
-      if (saved.compFrame)      setCompFrame(saved.compFrame);
-      if (saved.rivaComplete)   setRivaComplete(saved.rivaComplete);
-      if (saved.compComplete)   setCompComplete(saved.compComplete);
-      if (saved.pipelineLogs)   setPipelineLogs(saved.pipelineLogs);
-      // pipelineStatus is intentionally not restored — the pipeline always sets it fresh
-      if (saved.reports?.length)  setReports(saved.reports);
-      if (saved.chatMessages)   setChatMessages(saved.chatMessages);
-      setRivaWsState('closed');
-      setCompWsState('closed');
-      setIsRestoring(true);
-    } catch { /* ignore */ }
+    if (rivaUrl || compUrl) {
+      try {
+        const raw = sessionStorage.getItem(storageKey);
+        if (raw) {
+          const saved = JSON.parse(raw);
+          isRestoringRef.current = true;
+          setIsRestoring(true);
+          if (saved.sessionId)     sessionIdRef.current = saved.sessionId;
+          if (saved.rivaFrame)     setRivaFrame(saved.rivaFrame);
+          if (saved.compFrame)     setCompFrame(saved.compFrame);
+          if (saved.rivaComplete)  setRivaComplete(saved.rivaComplete);
+          if (saved.compComplete)  setCompComplete(saved.compComplete);
+          if (saved.pipelineLogs)  setPipelineLogs(saved.pipelineLogs);
+          if (saved.reports?.length) setReports(saved.reports);
+          if (saved.chatMessages)  setChatMessages(saved.chatMessages);
+          setRivaWsState('closed');
+          setCompWsState('closed');
+        }
+      } catch { /* ignore */ }
+    }
+    setStorageChecked(true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sessionId = sessionIdRef.current;
-  const expected = isRestoring ? 0 : (rivaUrl ? 1 : 0) + (compUrl ? 1 : 0);
+  const expected  = isRestoring ? 0 : (rivaUrl ? 1 : 0) + (compUrl ? 1 : 0);
+
   const [rivaStuckMilestone, setRivaStuckMilestone] = useState<string | null>(null);
   const [compStuckMilestone, setCompStuckMilestone] = useState<string | null>(null);
 
-  const [pipelineLogs,    setPipelineLogs]    = useState<PipelineLog[]>([]);
-  const [pipelineStatus,  setPipelineStatus]  = useState<'waiting'|'vectorizing'|'ready'>('waiting');
-
-  const [reports, setReports] = useState<ReportEntry[]>([]);
-
-  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
-
-  const [rivaCanSkip, setRivaCanSkip] = useState(false);
-  const [compCanSkip, setCompCanSkip] = useState(false);
-
+  const [pipelineLogs,   setPipelineLogs]   = useState<PipelineLog[]>([]);
+  const [pipelineStatus, setPipelineStatus] = useState<'waiting'|'vectorizing'|'ready'>('waiting');
+  const [reports,        setReports]        = useState<ReportEntry[]>([]);
+  const [chatMessages,   setChatMessages]   = useState<ChatMsg[]>([]);
+  const [rivaCanSkip,    setRivaCanSkip]    = useState(false);
+  const [compCanSkip,    setCompCanSkip]    = useState(false);
   const [logsExpanded,   setLogsExpanded]   = useState(true);
   const [bottomExpanded, setBottomExpanded] = useState(false);
 
+  // Persist UI state
   useEffect(() => {
     if (!rivaUrl && !compUrl) return;
     try {
@@ -739,13 +717,12 @@ function DashboardContent() {
   }, [sessionId, rivaComplete, compComplete, rivaFrame, compFrame,
       chatMessages, pipelineLogs, pipelineStatus, reports]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Check if each domain is already vectorized (enables skip button)
+  // Check if domains are already vectorized (skip button + hint)
   useEffect(() => {
     function checkDomain(url: string, setter: (v: boolean) => void) {
       if (!url) return;
       try {
-        const domain = new URL(url.startsWith('http') ? url : 'https://' + url).hostname
-          .replace(/^www\./, '');
+        const domain = new URL(url.startsWith('http') ? url : 'https://' + url).hostname.replace(/^www\./, '');
         fetch(`${API_BASE}/check-vectorized?domain=${encodeURIComponent(domain)}`)
           .then(r => r.json())
           .then(d => setter(!!d.vectorized))
@@ -757,21 +734,40 @@ function DashboardContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rivaUrl, compUrl]);
 
+  // Synthetic thought when a domain is already cached
+  useEffect(() => {
+    if (rivaCanSkip && !rivaComplete && !isRestoringRef.current) {
+      setRivaThoughts(p => [...p, {
+        text: 'Domain already indexed — click skip to use cached data.',
+        state: 'found', ts: now(),
+      }]);
+    }
+  }, [rivaCanSkip]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (compCanSkip && !compComplete && !isRestoringRef.current) {
+      setCompThoughts(p => [...p, {
+        text: 'Domain already indexed — click skip to use cached data.',
+        state: 'found', ts: now(),
+      }]);
+    }
+  }, [compCanSkip]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const rivaWsRef     = useRef<WebSocket | null>(null);
   const compWsRef     = useRef<WebSocket | null>(null);
   const pipelineWsRef = useRef<WebSocket | null>(null);
 
+  // Pipeline WebSocket — gated on storageChecked
   useEffect(() => {
-    if (!sessionId || expected === 0) return;
+    if (!storageChecked) return;
+    if (isRestoringRef.current || !sessionId || expected === 0) return;
     const ws = new WebSocket(`${WS_BASE}/ws/pipeline?session=${sessionId}&expected=${expected}`);
     pipelineWsRef.current = ws;
-    ws.onopen  = () => {};
-    ws.onclose = () => {};
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'log')           setPipelineLogs(p => [...p, { text: msg.text, state: msg.state, ts: now() }]);
-      else if (msg.type === 'chat')     setChatMessages(p => [...p, { role: 'assistant', text: msg.text, ts: now() }]);
-      else if (msg.type === 'status')   setPipelineStatus(msg.value);
+      if (msg.type === 'log')          setPipelineLogs(p => [...p, { text: msg.text, state: msg.state, ts: now() }]);
+      else if (msg.type === 'chat')    setChatMessages(p => [...p, { role: 'assistant', text: msg.text, ts: now() }]);
+      else if (msg.type === 'status')  setPipelineStatus(msg.value);
       else if (msg.type === 'report_ready') {
         setReports(prev => [...prev, {
           type: msg.report_type as 'pdf' | 'pptx',
@@ -783,10 +779,12 @@ function DashboardContent() {
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, storageChecked]);
 
+  // Riva browse WebSocket — gated on storageChecked
   useEffect(() => {
-    if (isRestoring || !rivaUrl) { setRivaWsState('closed'); return; }
+    if (!storageChecked) return;
+    if (isRestoringRef.current || !rivaUrl) { setRivaWsState('closed'); return; }
     const ws = new WebSocket(`${WS_BASE}/ws/browse?session=${sessionId}&role=riva`);
     rivaWsRef.current = ws;
     ws.onopen    = () => { setRivaWsState('open'); ws.send(JSON.stringify({ url: rivaUrl })); };
@@ -801,10 +799,12 @@ function DashboardContent() {
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rivaUrl]);
+  }, [rivaUrl, storageChecked]);
 
+  // Comp browse WebSocket — gated on storageChecked
   useEffect(() => {
-    if (isRestoring || !compUrl) { setCompWsState('closed'); return; }
+    if (!storageChecked) return;
+    if (isRestoringRef.current || !compUrl) { setCompWsState('closed'); return; }
     const ws = new WebSocket(`${WS_BASE}/ws/browse?session=${sessionId}&role=comp`);
     compWsRef.current = ws;
     ws.onopen    = () => { setCompWsState('open'); ws.send(JSON.stringify({ url: compUrl })); };
@@ -819,7 +819,7 @@ function DashboardContent() {
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compUrl]);
+  }, [compUrl, storageChecked]);
 
   function sendToWs(wsRef: React.RefObject<WebSocket | null>, msg: object) {
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(msg));
@@ -846,10 +846,8 @@ function DashboardContent() {
     const setFrame    = side === 'riva' ? setRivaFrame    : setCompFrame;
     const setPaused   = side === 'riva' ? setRivaPaused   : setCompPaused;
     const setComplete = side === 'riva' ? setRivaComplete : setCompComplete;
-
     wsRef.current?.close();
     setComplete(false); setPaused(false); setThoughts([]); setFrame('');
-
     const ws = new WebSocket(`${WS_BASE}/ws/browse?session=${sessionId}&role=${side}`);
     wsRef.current = ws;
     setWsState('connecting');
@@ -878,12 +876,30 @@ function DashboardContent() {
   const RIVA_COLOR = 'rgba(77,184,255,0.55)';
   const COMP_COLOR = 'rgba(255,107,107,0.55)';
 
+  // HITL: when one agent is stuck, dim the other and pulse the stuck one's border
+  const rivaIsStuck  = rivaStuckMilestone !== null && !rivaComplete;
+  const compIsStuck  = compStuckMilestone !== null && !compComplete;
+  const rivaIsDimmed = compIsStuck && !rivaComplete;
+  const compIsDimmed = rivaIsStuck && !compComplete;
+
   return (
     <>
+      <style>{`
+        @keyframes pulseSkipHint {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(109,192,138,0.5); }
+          50%       { box-shadow: 0 0 6px 2px rgba(109,192,138,0.15); }
+        }
+        @keyframes pulseStuckBorder {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(200,168,74,0.6), 0 0 0 0 rgba(200,168,74,0); }
+          50%       { box-shadow: 0 0 0 3px rgba(200,168,74,0.3), 0 0 16px 4px rgba(200,168,74,0.12); }
+        }
+      `}</style>
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" />
-      <div className="h-screen flex flex-col overflow-hidden text-white"
+
+      {/* Outer div — no h-screen/overflow-hidden so page expands when reports open */}
+      <div className="flex flex-col text-white"
         style={{ background: 'linear-gradient(135deg, #0e0d2b 0%, #1a1040 40%, #0d0820 100%)',
-          fontFamily: "'DM Sans', system-ui, sans-serif" }}>
+          fontFamily: "'DM Sans', system-ui, sans-serif", minHeight: '100vh' }}>
 
         {/* ── Navbar ── */}
         <div className="flex justify-center px-6 pt-4 pb-2 shrink-0">
@@ -908,13 +924,11 @@ function DashboardContent() {
               <span style={{ fontWeight: 600, letterSpacing: '6px', fontSize: 14,
                 textTransform: 'uppercase', color: '#ffffff' }}>RIVA</span>
             </button>
-
             <div className="flex items-center gap-3" style={{ fontSize: 10, fontFamily: "'Fira Code', monospace" }}>
               {rivaUrl && <span style={{ color: 'rgba(77,184,255,0.7)' }} className="truncate max-w-[80px] sm:max-w-[160px]">{hostname(rivaUrl)}</span>}
               {rivaUrl && compUrl && <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11 }}>vs</span>}
               {compUrl && <span style={{ color: 'rgba(255,107,107,0.7)' }} className="truncate max-w-[80px] sm:max-w-[160px]">{hostname(compUrl)}</span>}
             </div>
-
             <button
               onClick={() => { try { sessionStorage.removeItem(storageKey); } catch {} router.push('/'); }}
               className="flex items-center gap-2 px-4 py-1.5 rounded-full transition-all"
@@ -925,9 +939,10 @@ function DashboardContent() {
           </header>
         </div>
 
-        {/* ── Main ── */}
-        <div className="flex-1 min-h-0 px-3 overflow-y-auto flex flex-col">
-          {/* Active area — fixed height so browser panels are never compressed by the report section below */}
+        {/* ── Main — active area is viewport-height, report section pushes page taller ── */}
+        <div className="px-3 flex flex-col">
+
+          {/* Active area — locked to viewport height, never squished by report below */}
           <div className="flex flex-col shrink-0" style={{ height: 'calc(100vh - 88px)' }}>
 
             {/* Mini logs row */}
@@ -956,14 +971,20 @@ function DashboardContent() {
               </div>
             )}
 
-            {/* Browser panels — stack vertically on small screens */}
+            {/* Browser panels */}
             <div className="flex-1 flex flex-col md:flex-row min-h-0 gap-2 pb-2">
               {rivaUrl && (
                 <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
-                  style={{ border: `1.5px solid ${RIVA_COLOR}` }}>
+                  style={{
+                    border: rivaIsStuck
+                      ? '1.5px solid rgba(200,168,74,0.8)'
+                      : `1.5px solid ${RIVA_COLOR}`,
+                    animation: rivaIsStuck ? 'pulseStuckBorder 1.8s ease-in-out infinite' : 'none',
+                    transition: 'border-color 0.3s ease',
+                  }}>
                   <BrowserPanel label="riva" frameSrc={rivaFrame} active
                     isPaused={rivaPaused} isComplete={rivaComplete} wsActive={rivaWsState === 'open'}
-                    stuckMilestone={rivaStuckMilestone} canSkip={rivaCanSkip}
+                    stuckMilestone={rivaStuckMilestone} canSkip={rivaCanSkip} dimmed={rivaIsDimmed}
                     onTogglePause={() => togglePause('riva')}
                     onSkip={() => skipBrowse('riva')}
                     onInteraction={(t: string, x: number, y: number) => sendToWs(rivaWsRef, { type: t, x, y })}
@@ -973,10 +994,16 @@ function DashboardContent() {
               )}
               {compUrl && (
                 <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
-                  style={{ border: `1.5px solid ${COMP_COLOR}` }}>
+                  style={{
+                    border: compIsStuck
+                      ? '1.5px solid rgba(200,168,74,0.8)'
+                      : `1.5px solid ${COMP_COLOR}`,
+                    animation: compIsStuck ? 'pulseStuckBorder 1.8s ease-in-out infinite' : 'none',
+                    transition: 'border-color 0.3s ease',
+                  }}>
                   <BrowserPanel label="comp" frameSrc={compFrame} active
                     isPaused={compPaused} isComplete={compComplete} wsActive={compWsState === 'open'}
-                    stuckMilestone={compStuckMilestone} canSkip={compCanSkip}
+                    stuckMilestone={compStuckMilestone} canSkip={compCanSkip} dimmed={compIsDimmed}
                     onTogglePause={() => togglePause('comp')}
                     onSkip={() => skipBrowse('comp')}
                     onInteraction={(t: string, x: number, y: number) => sendToWs(compWsRef, { type: t, x, y })}
@@ -986,7 +1013,7 @@ function DashboardContent() {
               )}
             </div>
 
-            {/* ── Bottom: inference logs + chat ── */}
+            {/* Bottom: inference logs + chat */}
             <div className="flex flex-col sm:flex-row shrink-0 rounded-lg overflow-hidden mb-3"
               style={{
                 height: bottomExpanded ? 400 : 220,
@@ -1006,10 +1033,8 @@ function DashboardContent() {
             </div>
           </div>
 
-          {/* Report section sits below active area — expands into scrollable space */}
-          {reports.length > 0 && (
-            <ReportPreviewSection reports={reports} />
-          )}
+          {/* Report section — sits below active area, expands the page downward */}
+          {reports.length > 0 && <ReportPreviewSection reports={reports} />}
         </div>
       </div>
     </>
