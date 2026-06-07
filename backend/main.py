@@ -422,6 +422,11 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "Riva backend"}
+
+
 @app.get("/sessions")
 def list_sessions():
     with _db_lock, _db() as conn:
