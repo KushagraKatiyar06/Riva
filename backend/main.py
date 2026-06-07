@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import asyncio
@@ -41,6 +41,9 @@ CF_HEADERS = {
 EXTRACTS_DIR = Path(__file__).parent.parent / "testing" / "extracts"
 REPORTS_DIR = Path(__file__).parent.parent / "testing" / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+DAILY_RUN_LIMIT = 2          # per IP per UTC day
+CLEAR_PASSWORD  = os.getenv("CLEAR_PASSWORD", "riva-admin")
 
 # Import report generation modules from testing/
 _TESTING_DIR = str(Path(__file__).parent.parent / "testing")
@@ -393,7 +396,20 @@ def init_db():
                 captured_at  TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
+            CREATE TABLE IF NOT EXISTS runs (
+                id         TEXT PRIMARY KEY,
+                riva_url   TEXT,
+                comp_url   TEXT,
+                started_at TEXT NOT NULL,
+                client_id  TEXT
+            );
         """)
+        # Migrations for existing deployments
+        for col, definition in [("ip", "TEXT"), ("client_id", "TEXT")]:
+            try:
+                conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {definition}")
+            except Exception:
+                pass  # column already exists
 
 
 init_db()
@@ -449,6 +465,210 @@ def serve_report(filename: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Report not found")
     return FileResponse(str(path))
+
+
+@app.get("/daily-limit")
+def daily_limit_endpoint(request: Request):
+    client_id = request.headers.get("x-client-id", "").strip()
+    if not client_id:
+        return {"used": 0, "limit": DAILY_RUN_LIMIT, "remaining": DAILY_RUN_LIMIT}
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    with _db_lock, _db() as conn:
+        used = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE client_id = ? AND started_at LIKE ?",
+            (client_id, f"{today}%"),
+        ).fetchone()[0]
+    return {"used": used, "limit": DAILY_RUN_LIMIT, "remaining": max(0, DAILY_RUN_LIMIT - used)}
+
+
+@app.post("/start-run")
+async def start_run(request: Request):
+    body      = await request.json()
+    riva_url  = body.get("riva_url", "")
+    comp_url  = body.get("comp_url", "")
+    client_id = request.headers.get("x-client-id", "").strip() or body.get("client_id", "unknown")
+    today     = datetime.utcnow().strftime("%Y-%m-%d")
+    with _db_lock, _db() as conn:
+        used = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE client_id = ? AND started_at LIKE ?",
+            (client_id, f"{today}%"),
+        ).fetchone()[0]
+        if used >= DAILY_RUN_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Daily limit of {DAILY_RUN_LIMIT} runs reached. Try again tomorrow.",
+            )
+        run_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO runs (id, riva_url, comp_url, started_at, client_id) VALUES (?, ?, ?, ?, ?)",
+            (run_id, riva_url, comp_url, datetime.utcnow().isoformat(), client_id),
+        )
+    return {"allowed": True, "run_id": run_id, "used": used + 1, "limit": DAILY_RUN_LIMIT}
+
+
+@app.get("/runs")
+def list_runs():
+    with _db_lock, _db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM runs ORDER BY started_at DESC LIMIT 50"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/list-reports")
+def list_reports_endpoint():
+    files = []
+    if REPORTS_DIR.exists():
+        for f in sorted(REPORTS_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
+            if not f.is_file() or f.name.startswith("."):
+                continue
+            ext = f.suffix.lower()
+            ftype = "pptx" if ext == ".pptx" else "pdf" if ext == ".pdf" else None
+            if ftype:
+                files.append({
+                    "filename": f.name,
+                    "size": f.stat().st_size,
+                    "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+                    "url": f"/reports/{f.name}",
+                    "type": ftype,
+                })
+    return {"files": files}
+
+
+@app.get("/clear-preview")
+def clear_preview():
+    """Return a summary of everything that would be wiped by /clear-data."""
+    domains = []
+    total_vectors = 0
+    if EXTRACTS_DIR.exists():
+        for domain_dir in sorted(EXTRACTS_DIR.iterdir()):
+            if not domain_dir.is_dir():
+                continue
+            txt_files = list(domain_dir.glob("*.txt"))
+            vec_count = 0
+            for txt_file in txt_files:
+                try:
+                    raw = txt_file.read_text(encoding="utf-8")
+                    lines = raw.splitlines()
+                    past_divider = False
+                    content_lines: list[str] = []
+                    for line in lines:
+                        if not past_divider:
+                            if line.startswith("=" * 10):
+                                past_divider = True
+                        else:
+                            content_lines.append(line)
+                    content = "\n".join(content_lines).strip()
+                    vec_count += len(_chunk_text(content))
+                except Exception:
+                    pass
+            total_vectors += vec_count
+            domains.append({"domain": domain_dir.name, "files": len(txt_files), "vectors": vec_count})
+
+    report_files = []
+    if REPORTS_DIR.exists():
+        for f in sorted(REPORTS_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
+            if f.is_file() and not f.name.startswith("."):
+                ext = f.suffix.lower()
+                ftype = "pptx" if ext == ".pptx" else "pdf" if ext == ".pdf" else None
+                if ftype:
+                    report_files.append({
+                        "filename": f.name,
+                        "size": f.stat().st_size,
+                        "type": ftype,
+                    })
+
+    with _db_lock, _db() as conn:
+        run_count     = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+        session_count = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+
+    return {
+        "domains":       domains,
+        "total_vectors": total_vectors,
+        "report_files":  report_files,
+        "run_count":     run_count,
+        "session_count": session_count,
+    }
+
+
+@app.delete("/clear-data")
+async def clear_data_endpoint(request: Request):
+    body = await request.json()
+    if body.get("password", "") != CLEAR_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid password")
+
+    deleted_vectors = 0
+    deleted_files = 0
+
+    # 1. Reconstruct vector IDs from extract files then delete from Vectorize
+    ids_to_delete: list[str] = []
+    if EXTRACTS_DIR.exists():
+        for domain_dir in EXTRACTS_DIR.iterdir():
+            if not domain_dir.is_dir():
+                continue
+            for txt_file in domain_dir.glob("*.txt"):
+                try:
+                    raw = txt_file.read_text(encoding="utf-8")
+                    lines = raw.splitlines()
+                    meta: dict = {}
+                    past_divider = False
+                    content_lines: list[str] = []
+                    for line in lines:
+                        if not past_divider:
+                            if line.startswith("URL      :"):
+                                meta["url"] = line.split(":", 1)[1].strip()
+                            elif line.startswith("Type     :"):
+                                meta["type"] = line.split(":", 1)[1].strip()
+                            elif line.startswith("=" * 10):
+                                past_divider = True
+                        else:
+                            content_lines.append(line)
+                    content = "\n".join(content_lines).strip()
+                    url_val = meta.get("url", "")
+                    intel_type = meta.get("type", "unknown")
+                    domain = domain_dir.name
+                    chunks = _chunk_text(content)
+                    for i in range(len(chunks)):
+                        ids_to_delete.append(_vector_id(domain, intel_type, url_val, i))
+                except Exception:
+                    pass
+
+    if ids_to_delete and CF_ACCOUNT_ID and CF_API_TOKEN:
+        del_url = (
+            f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
+            f"/vectorize/v2/indexes/{CF_INDEX_NAME}/delete-by-ids"
+        )
+        for i in range(0, len(ids_to_delete), 100):
+            batch = ids_to_delete[i:i + 100]
+            try:
+                resp = requests.post(del_url, headers=CF_HEADERS, json={"ids": batch}, timeout=30)
+                if resp.ok:
+                    deleted_vectors += len(batch)
+            except Exception:
+                pass
+
+    # 2. Wipe extract directories
+    if EXTRACTS_DIR.exists():
+        shutil.rmtree(str(EXTRACTS_DIR))
+    EXTRACTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 3. Delete report files
+    if REPORTS_DIR.exists():
+        for f in REPORTS_DIR.glob("*"):
+            if f.is_file():
+                try:
+                    f.unlink()
+                    deleted_files += 1
+                except Exception:
+                    pass
+
+    # 4. Clear SQLite tables
+    with _db_lock, _db() as conn:
+        conn.execute("DELETE FROM intel")
+        conn.execute("DELETE FROM sessions")
+        conn.execute("DELETE FROM runs")
+
+    return {"cleared": True, "vectors_deleted": deleted_vectors, "files_deleted": deleted_files}
 
 
 @app.websocket("/ws/browse")
