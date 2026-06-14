@@ -246,15 +246,20 @@ def generate_intel(domains: list, focus: str = None) -> dict:
         # Small delay between each embed call to stay under Workers AI rate limit
         sections[d]["pricing"]     = chunks_for(d, "pricing tiers cost plans price per month");     time.sleep(1)
         sections[d]["features"]    = chunks_for(d, "features capabilities product functionality");   time.sleep(1)
-        sections[d]["positioning"] = chunks_for(d, "about company product description target audience")
+        sections[d]["positioning"] = chunks_for(d, "about company product description target audience"); time.sleep(1)
+        if focus:
+            sections[d]["focus"] = chunks_for(d, focus)
+            time.sleep(1)
 
     context_block = ""
     for d, s in sections.items():
+        focus_block = f"\n\nFOCUS ({focus}):\n{s['focus']}" if focus and s.get("focus") else ""
         context_block += (
             f"\n\n=== {d} ===\n"
             f"PRICING:\n{s['pricing']}\n\n"
             f"FEATURES:\n{s['features']}\n\n"
             f"POSITIONING:\n{s['positioning']}"
+            f"{focus_block}"
         )
 
     # Build the schema string outside the f-string to avoid backslash issues
