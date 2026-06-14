@@ -486,19 +486,30 @@ def daily_limit_endpoint(request: Request):
     return {"used": used, "limit": DAILY_RUN_LIMIT, "remaining": max(0, DAILY_RUN_LIMIT - used)}
 
 
+@app.get("/admin/verify")
+def admin_verify(request: Request):
+    """Check whether the provided password grants admin (limit-bypass) access."""
+    pw = request.headers.get("x-admin-password", "").strip()
+    if pw and pw == CLEAR_PASSWORD:
+        return {"ok": True}
+    return {"ok": False}
+
+
 @app.post("/start-run")
 async def start_run(request: Request):
     body      = await request.json()
     riva_url  = body.get("riva_url", "")
     comp_url  = body.get("comp_url", "")
     client_id = request.headers.get("x-client-id", "").strip() or body.get("client_id", "unknown")
+    admin_pw  = request.headers.get("x-admin-password", "").strip()
+    is_admin  = admin_pw and admin_pw == CLEAR_PASSWORD
     today     = datetime.utcnow().strftime("%Y-%m-%d")
     with _db_lock, _db() as conn:
         used = conn.execute(
             "SELECT COUNT(*) FROM runs WHERE client_id = ? AND started_at LIKE ?",
             (client_id, f"{today}%"),
         ).fetchone()[0]
-        if used >= DAILY_RUN_LIMIT:
+        if not is_admin and used >= DAILY_RUN_LIMIT:
             raise HTTPException(
                 status_code=429,
                 detail=f"Daily limit of {DAILY_RUN_LIMIT} runs reached. Try again tomorrow.",
@@ -508,7 +519,7 @@ async def start_run(request: Request):
             "INSERT INTO runs (id, riva_url, comp_url, started_at, client_id) VALUES (?, ?, ?, ?, ?)",
             (run_id, riva_url, comp_url, datetime.utcnow().isoformat(), client_id),
         )
-    return {"allowed": True, "run_id": run_id, "used": used + 1, "limit": DAILY_RUN_LIMIT}
+    return {"allowed": True, "run_id": run_id, "used": used + 1, "limit": DAILY_RUN_LIMIT, "admin": is_admin}
 
 
 @app.get("/runs")
@@ -587,12 +598,27 @@ def clear_preview():
         run_count     = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
         session_count = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
 
+    # Live vector count directly from Cloudflare Vectorize
+    cf_vectors: int | None = None
+    if CF_ACCOUNT_ID and CF_API_TOKEN:
+        try:
+            info_url = (
+                f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
+                f"/vectorize/v2/indexes/{CF_INDEX_NAME}"
+            )
+            resp = requests.get(info_url, headers=CF_HEADERS, timeout=10)
+            if resp.ok:
+                cf_vectors = resp.json().get("result", {}).get("vectors_count")
+        except Exception:
+            pass
+
     return {
         "domains":       domains,
         "total_vectors": total_vectors,
         "report_files":  report_files,
         "run_count":     run_count,
         "session_count": session_count,
+        "cf_vectors":    cf_vectors,
     }
 
 
@@ -605,52 +631,41 @@ async def clear_data_endpoint(request: Request):
     deleted_vectors = 0
     deleted_files = 0
 
-    # 1. Reconstruct vector IDs from extract files then delete from Vectorize
-    ids_to_delete: list[str] = []
-    if EXTRACTS_DIR.exists():
-        for domain_dir in EXTRACTS_DIR.iterdir():
-            if not domain_dir.is_dir():
-                continue
-            for txt_file in domain_dir.glob("*.txt"):
-                try:
-                    raw = txt_file.read_text(encoding="utf-8")
-                    lines = raw.splitlines()
-                    meta: dict = {}
-                    past_divider = False
-                    content_lines: list[str] = []
-                    for line in lines:
-                        if not past_divider:
-                            if line.startswith("URL      :"):
-                                meta["url"] = line.split(":", 1)[1].strip()
-                            elif line.startswith("Type     :"):
-                                meta["type"] = line.split(":", 1)[1].strip()
-                            elif line.startswith("=" * 10):
-                                past_divider = True
-                        else:
-                            content_lines.append(line)
-                    content = "\n".join(content_lines).strip()
-                    url_val = meta.get("url", "")
-                    intel_type = meta.get("type", "unknown")
-                    domain = domain_dir.name
-                    chunks = _chunk_text(content)
-                    for i in range(len(chunks)):
-                        ids_to_delete.append(_vector_id(domain, intel_type, url_val, i))
-                except Exception:
-                    pass
-
-    if ids_to_delete and CF_ACCOUNT_ID and CF_API_TOKEN:
-        del_url = (
+    # 1. Delete and recreate the entire Vectorize index — guaranteed clean slate
+    index_error: str | None = None
+    if CF_ACCOUNT_ID and CF_API_TOKEN:
+        index_base = (
             f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
-            f"/vectorize/v2/indexes/{CF_INDEX_NAME}/delete-by-ids"
+            f"/vectorize/v2/indexes/{CF_INDEX_NAME}"
         )
-        for i in range(0, len(ids_to_delete), 100):
-            batch = ids_to_delete[i:i + 100]
-            try:
-                resp = requests.post(del_url, headers=CF_HEADERS, json={"ids": batch}, timeout=30)
-                if resp.ok:
-                    deleted_vectors += len(batch)
-            except Exception:
-                pass
+        try:
+            del_resp = requests.delete(index_base, headers=CF_HEADERS, timeout=30)
+            # 404 means it didn't exist — that's fine
+            if del_resp.ok or del_resp.status_code == 404:
+                # Small pause to let Cloudflare propagate the deletion
+                time.sleep(2)
+                # Recreate with same config as original index
+                create_url = (
+                    f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
+                    f"/vectorize/v2/indexes"
+                )
+                create_resp = requests.post(
+                    create_url,
+                    headers=CF_HEADERS,
+                    json={
+                        "name": CF_INDEX_NAME,
+                        "config": {"dimensions": 768, "metric": "cosine"},
+                    },
+                    timeout=30,
+                )
+                if create_resp.ok:
+                    deleted_vectors = -1  # signals "index wiped and recreated"
+                else:
+                    index_error = f"recreate failed {create_resp.status_code}: {create_resp.text[:200]}"
+            else:
+                index_error = f"delete failed {del_resp.status_code}: {del_resp.text[:200]}"
+        except Exception as e:
+            index_error = str(e)
 
     # 2. Wipe extract directories
     if EXTRACTS_DIR.exists():
@@ -673,7 +688,13 @@ async def clear_data_endpoint(request: Request):
         conn.execute("DELETE FROM sessions")
         conn.execute("DELETE FROM runs")
 
-    return {"cleared": True, "vectors_deleted": deleted_vectors, "files_deleted": deleted_files}
+    index_reset = deleted_vectors == -1
+    return {
+        "cleared": True,
+        "index_reset": index_reset,
+        "files_deleted": deleted_files,
+        "index_error": index_error,
+    }
 
 
 @app.websocket("/ws/browse")
@@ -837,11 +858,13 @@ async def browse_websocket(
                     try:
                         return future.result(timeout=12)
                     except concurrent.futures.TimeoutError:
-                        thought("Gemini timed out — surveying.", "info")
-                        return {"goal": "SURVEY", "thought": "API timeout"}
+                        thought("Gemini timed out.", "info")
+                        gemini_fail_count += 1
+                        return {"goal": "SURVEY", "thought": "API timeout", "__api_fail__": True}
                     except Exception as e:
                         thought(f"Brain error: {e}", "info")
-                        return {"goal": "SURVEY", "thought": "Brain error"}
+                        gemini_fail_count += 1
+                        return {"goal": "SURVEY", "thought": "Brain error", "__api_fail__": True}
 
             def full_page_extract(page) -> str:
                 page.evaluate("window.scrollTo(0, 0)")
@@ -1060,10 +1083,12 @@ async def browse_websocket(
                             page.goto(target_url, wait_until="domcontentloaded")
                         visited_urls.append(target_url)
 
-                        frustration     = 0
-                        challenge_count = 0   # total challenge detections this attempt
-                        challenge_cooldown = 0
-                        was_paused      = False
+                        frustration         = 0
+                        challenge_count     = 0   # total challenge detections this attempt
+                        challenge_cooldown  = 0
+                        was_paused          = False
+                        dead_steps          = 0   # consecutive steps with no progress and no useful action
+                        gemini_fail_count   = 0   # total Gemini API failures this attempt
 
                         for step in range(80):
                             if stop_event.is_set():
@@ -1177,10 +1202,30 @@ async def browse_websocket(
 
                             if progress:
                                 frustration = 0
+                                dead_steps  = 0
                                 if objectives["pricing"] and objectives["docs"]:
                                     thought("All milestones complete.", "complete")
                                     break
                                 continue
+
+                            # --- Dead-step HITL trigger ---
+                            dead_steps += 1
+                            missing_milestone = "docs" if objectives["pricing"] else "pricing"
+
+                            # Trigger HITL if: 5 consecutive dead steps, OR 4 Gemini API failures total
+                            if dead_steps >= 5 or gemini_fail_count >= 4:
+                                thought(
+                                    f"⚠ Your turn — couldn't find the {missing_milestone} page after "
+                                    f"{dead_steps} attempts. Navigate to it yourself, copy the URL, "
+                                    "and paste it in the highlighted bar above.",
+                                    "hitl",
+                                )
+                                thought_q.put({"type": "stuck_guidance", "milestone": missing_milestone})
+                                thought_q.put({"type": "auto_pause"})
+                                pause_event.clear()
+                                _stuck_pause[0] = True
+                                dead_steps = 0
+                                gemini_fail_count = 0
 
                             try:
                                 content  = page.evaluate("() => document.body.innerText")
@@ -1293,10 +1338,10 @@ async def browse_websocket(
                                                 "docs" if objectives["pricing"] else "pricing"
                                             )
                                             thought(
-                                                f"Couldn't find {milestone} after 3 attempts — "
-                                                "pausing. Paste the URL in the bar above and "
-                                                "I'll take it from there.",
-                                                "error",
+                                                f"⚠ Your turn — couldn't find the {milestone} page. "
+                                                "Navigate to it yourself, copy the URL, and paste it "
+                                                "in the highlighted bar above — I'll take it from there.",
+                                                "hitl",
                                             )
                                             thought_q.put({
                                                 "type": "stuck_guidance",
@@ -1323,6 +1368,22 @@ async def browse_websocket(
                                 thought(f"Step error: {e}", "info")
 
                             page.wait_for_timeout(500)
+
+                        # If loop exhausted and milestones incomplete, trigger HITL before closing
+                        if not (objectives["pricing"] and objectives["docs"]) and not stop_event.is_set():
+                            missing_milestone = "docs" if objectives["pricing"] else "pricing"
+                            thought(
+                                f"⚠ Your turn — ran out of steps without finding the {missing_milestone} page. "
+                                "Navigate to it yourself, copy the URL, and paste it in the highlighted bar above.",
+                                "hitl",
+                            )
+                            thought_q.put({"type": "stuck_guidance", "milestone": missing_milestone})
+                            thought_q.put({"type": "auto_pause"})
+                            pause_event.clear()
+                            _stuck_pause[0] = True
+                            # Wait for user to paste URL before closing browser
+                            while not stop_event.is_set():
+                                page.wait_for_timeout(500)
 
                         try:
                             ctx.close()
@@ -1408,13 +1469,10 @@ async def browse_websocket(
                         pause_event.set()
                         thought_q.put({"text": "Agent resuming...", "state": "info"})
                     elif dtype == "skip":
-                        skip_domain = re.sub(r'^www\.', '', urlparse(target_url).hostname or "unknown")
                         thought_q.put({"text": "Skipping browse — using cached extracts.", "state": "complete"})
                         stop_event.set()
                         pause_event.set()
-                        if session and session in _sessions:
-                            _sessions[session].mark_complete(skip_domain)
-                        thought_q.put({"type": "browse_complete"})
+                        # run_browser will call mark_complete and emit browse_complete when it exits
                     else:
                         action_q.put(data)
                 except Exception:
@@ -1537,6 +1595,7 @@ async def pipeline_websocket(
                 log("  No existing extract data found.", "error")
         else:
             log("Pipeline active — will vectorize each domain as agents complete.", "info")
+            out_q.put({"type": "status", "value": "vectorizing"})
             deadline = time.time() + 600  # 10-min overall cap
             while time.time() < deadline and not stop_evt.is_set():
                 try:
@@ -1557,65 +1616,47 @@ async def pipeline_websocket(
             out_q.put({"__done__": True})
             return
 
-        names_str = " and ".join(sorted(all_domains))
-        if expected == 0:
-            bot(
-                f"Session restored for **{names_str}**.\n\n"
-                "What would you like to do?\n"
-                "• Type **html** for a one-pager HTML report\n"
-                "• Type **pptx** for a PowerPoint deck\n"
-                "• Or ask me any question about the competitive data"
-            )
-        else:
-            bot(
-                f"All data for **{names_str}** has been vectorized!\n\n"
-                "What would you like to do?\n"
-                "• Type **html** for a one-pager HTML report\n"
-                "• Type **pptx** for a PowerPoint deck\n"
-                "• Or ask me any question about the competitive data"
-            )
+        # Give Cloudflare Vectorize a moment to propagate newly-upserted vectors
+        # before enabling the chat (avoids "unable to generate answer" on first query)
+        if expected > 0 and vectorized:
+            log("Waiting for search index to propagate...", "info")
+            time.sleep(8)
+
         out_q.put({"type": "status", "value": "ready"})
 
-        def _gen_html(focus: str | None):
-            focus_note = f" (focused on: **{focus}**)" if focus else ""
-            bot(f"On it! Generating one-pager{focus_note} — takes about 30 seconds.")
+        def _gen_pdf(focus: str | None):
             try:
-                log("Step 1/5 — Scraping brand assets (logos, OG images)...", "info")
+                focus_note = f" focused on {focus}" if focus else ""
+                log(f"Generating report{focus_note}...", "info")
+
+                log("Step 1/5 — Scraping brand assets...", "info")
                 images = {}
                 for d in all_domains:
-                    log(f"  Fetching assets for {d}...", "info")
                     images[d] = scrape_brand_assets(d)
                     found = [k for k, v in images[d].items() if v]
-                    log(f"  {d}: found {found or 'no images'}", "info")
+                    log(f"  {d}: {found or 'no images'}", "info")
 
-                log("Step 2/5 — Querying Vectorize for pricing, features, positioning...", "info")
+                log("Step 2/5 — Querying knowledge base...", "info")
                 if focus:
-                    log(f"  Focus area: {focus}", "info")
-                for d in all_domains:
-                    log(f"  Pulling intel chunks for {d}...", "info")
+                    log(f"  Focus: {focus}", "info")
                 intel = generate_intel(all_domains, focus=focus)
                 for d in all_domains:
                     tiers = len(intel["domains"].get(d, {}).get("pricing_tiers", []))
                     feats = len(intel["domains"].get(d, {}).get("top_features", []))
-                    log(f"  {d}: {tiers} pricing tiers, {feats} features extracted", "info")
+                    log(f"  {d}: {tiers} pricing tiers, {feats} features", "info")
 
-                log("Step 3/5 — Rendering HTML layout...", "info")
+                log("Step 3/5 — Rendering HTML...", "info")
                 html = render_html(intel, images)
-                log(f"  HTML generated ({len(html):,} chars)", "info")
 
-                log("Step 4/5 — Saving HTML to disk...", "info")
-                def _domain_slug(d: str) -> str:
+                log("Step 4/5 — Saving HTML...", "info")
+                def _slug(d: str) -> str:
                     name = intel["domains"][d].get("display_name", "")
-                    slug_part = re.sub(r'[^a-z0-9-]', '', name.lower().replace(" ", "-"))
-                    # Fall back to the domain name if display_name is empty or a placeholder
-                    if not slug_part or slug_part in ("short-brand-name", ""):
-                        slug_part = re.sub(r'[^a-z0-9-]', '', d.lower().replace(".", "-"))
-                    return slug_part
-                slug = "_vs_".join(_domain_slug(d) for d in all_domains)
+                    s = re.sub(r'[^a-z0-9-]', '', name.lower().replace(" ", "-"))
+                    return s if s and s != "short-brand-name" else re.sub(r'[^a-z0-9-]', '', d.lower().replace(".", "-"))
+                slug      = "_vs_".join(_slug(d) for d in all_domains)
                 ts        = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
                 html_path = REPORTS_DIR / f"riva_report_{slug}_{ts}.html"
                 html_path.write_text(html, encoding="utf-8")
-                log(f"  HTML saved: {html_path.name}", "info")
 
                 log("Step 5/5 — Converting to PDF...", "info")
                 pdf_path = _html_to_pdf(html_path, log_fn=log)
@@ -1626,196 +1667,22 @@ async def pipeline_websocket(
                     "preview_url": f"/reports/{html_path.name}",
                     "filename": pdf_path.name,
                 })
-                bot("One-pager PDF is ready! Click **View Report** in the pipeline bar.")
             except Exception as e:
                 log(f"Report error: {e}", "error")
-                bot(f"Report generation failed: {e}")
 
-        def _gen_pptx(focus: str | None):
-            focus_note = f" (focused on: **{focus}**)" if focus else ""
-            bot(f"On it! Building PowerPoint deck{focus_note} — takes about 45 seconds.")
-            try:
-                log("Step 1/5 — Scraping brand assets (logos, OG images)...", "info")
-                images = {}
-                for d in all_domains:
-                    log(f"  Fetching assets for {d}...", "info")
-                    images[d] = scrape_brand_assets(d)
-                    found = [k for k, v in images[d].items() if v]
-                    log(f"  {d}: found {found or 'no images'}", "info")
-
-                log("Step 2/5 — Querying Vectorize for competitive intel...", "info")
-                if focus:
-                    log(f"  Focus area: {focus}", "info")
-                for d in all_domains:
-                    log(f"  Pulling intel chunks for {d}...", "info")
-                intel = generate_intel(all_domains, focus=focus)
-                for d in all_domains:
-                    tiers = len(intel["domains"].get(d, {}).get("pricing_tiers", []))
-                    log(f"  {d}: {tiers} pricing tiers structured", "info")
-
-                log("Step 3/5 — Generating GTM strategy with Gemini...", "info")
-                log("  Asking Gemini for key messages, objections, action items...", "info")
-                gtm = generate_gtm(all_domains, intel, focus=focus)
-                log(f"  GTM: {len(gtm.get('key_messages', []))} messages, "
-                    f"{len(gtm.get('action_items', []))} action items", "info")
-
-                log("Step 4/5 — Building slides...", "info")
-                from pptx_report import _make_theme
-                theme = _make_theme(images, all_domains)
-                prs_obj = new_prs()
-                for label, fn, args in [
-                    ("Title",                    slide_title,          (prs_obj, intel, images, theme)),
-                    ("Executive Summary",         slide_exec_summary,   (prs_obj, intel, images, theme)),
-                    ("Pricing Comparison",        slide_pricing,        (prs_obj, intel, theme, images)),
-                    ("Competitive Differentiators", slide_differentiators, (prs_obj, intel, theme, images)),
-                    ("GTM Strategy",              slide_gtm,            (prs_obj, intel, gtm, theme, images)),
-                    ("Action Items",              slide_action_items,   (prs_obj, gtm, theme, all_domains)),
-                ]:
-                    log(f"  Slide: {label}", "info")
-                    fn(*args)
-
-                log("Step 5/5 — Saving deck and preview to disk...", "info")
-                names    = "_vs_".join(
-                    re.sub(r'[^a-z0-9-]', '', intel["domains"][d]["display_name"].lower().replace(" ", "-"))
-                    for d in all_domains
-                )
-                ts       = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                out_path = REPORTS_DIR / f"riva_deck_{names}_{ts}.pptx"
-                prs_obj.save(str(out_path))
-                log(f"Deck saved: {out_path.name} ({len(prs_obj.slides)} slides)", "success")
-                preview_url_val = f"/reports/{out_path.name}"
-                try:
-                    preview_path = REPORTS_DIR / f"riva_deck_{names}_{ts}_preview.html"
-                    preview_html = render_preview_html(intel, gtm, images, theme)
-                    preview_path.write_text(preview_html, encoding="utf-8")
-                    preview_url_val = f"/reports/{preview_path.name}"
-                    log(f"Preview HTML saved: {preview_path.name}", "info")
-                except Exception as prev_err:
-                    log(f"Preview generation failed (non-fatal): {prev_err}", "error")
-                out_q.put({
-                    "type": "report_ready", "report_type": "pptx",
-                    "url": f"/reports/{out_path.name}",
-                    "preview_url": preview_url_val,
-                    "filename": out_path.name,
-                })
-                bot("Deck is ready! Click **View Report** to download it.")
-            except Exception as e:
-                log(f"Deck error: {e}", "error")
-                bot(f"Deck generation failed: {e}")
-
-        _GENERAL_WORDS = {"general", "none", "no", "all", "everything", "full", "overview", "skip"}
-        pending_report: str | None = None
-
+        # Wait for user to submit their focus, then generate PDF once
         while not stop_evt.is_set():
             try:
-                user_text = in_q.get(timeout=1.0)
+                msg = in_q.get(timeout=1.0)
             except tqueue.Empty:
                 continue
-
-            text_lower = user_text.lower().strip()
-
-            if pending_report:
-                if text_lower in _GENERAL_WORDS:
-                    focus = None
-                else:
-                    focus = user_text.strip().rstrip(".,!?")
-                rtype = pending_report
-                pending_report = None
+            if isinstance(msg, dict) and msg.get("type") == "focus":
+                focus_text = msg.get("text", "").strip() or None
                 if not _REPORTS_AVAILABLE:
-                    bot("Report modules unavailable — check server import errors.")
-                    continue
-                if rtype == "html":
-                    _gen_html(focus)
+                    log("Report modules unavailable — check server import errors.", "error")
                 else:
-                    _gen_pptx(focus)
-                continue
-
-            focus = None
-            focus_match = re.search(r'\bfocus(?:ed)?\s+(?:on\s+)?(.+)', text_lower)
-            if focus_match:
-                focus = focus_match.group(1).strip().rstrip(".,!?")
-            if not focus:
-                about_match = re.search(
-                    r'\b(?:html|pptx?|report|deck|slides?)\b.{0,20}\babout\s+(.+)',
-                    text_lower,
-                )
-                if about_match:
-                    focus = about_match.group(1).strip().rstrip(".,!?")
-            if not focus:
-                remaining = re.sub(
-                    r'\*{0,2}\b(html|pptx?|powerpoint|report|deck|slides?|one.?pager|presentation)\b\*{0,2}',
-                    '', user_text, flags=re.IGNORECASE,
-                ).strip().strip('.,!?').strip()
-                if len(remaining.split()) >= 2:
-                    focus = remaining
-
-            is_html = any(w in text_lower for w in
-                          ["html", "report", "one-pager", "one pager", "pager"])
-            is_pptx = any(w in text_lower for w in
-                          ["pptx", "ppt", "powerpoint", "deck", "slides", "presentation"])
-
-            if is_html:
-                if not _REPORTS_AVAILABLE:
-                    bot("Report modules unavailable — check server import errors.")
-                    continue
-                if focus:
-                    _gen_html(focus)
-                else:
-                    pending_report = "html"
-                    bot(
-                        "What should the one-pager focus on?\n\n"
-                        "Describe the angle — e.g. *pricing comparison*, *developer features*, "
-                        "*enterprise use cases* — or type **general** for a full overview."
-                    )
-
-            elif is_pptx:
-                if not _REPORTS_AVAILABLE:
-                    bot("Report modules unavailable — check server import errors.")
-                    continue
-                if focus:
-                    _gen_pptx(focus)
-                else:
-                    pending_report = "pptx"
-                    bot(
-                        "What should the deck focus on?\n\n"
-                        "Describe the angle — e.g. *pricing comparison*, *GTM strategy*, "
-                        "*enterprise pitch* — or type **general** for a full overview."
-                    )
-
-            else:
-                try:
-                    log(f"RAG query: \"{user_text[:60]}\"", "info")
-                    if RIVA_WORKER_URL:
-                        # Route through Cloudflare Worker (native AI + Vectorize bindings)
-                        log("  Calling Cloudflare Worker for inference...", "info")
-                        resp = requests.post(
-                            f"{RIVA_WORKER_URL}/chat",
-                            json={"query": user_text, "domains": all_domains},
-                            timeout=30,
-                        )
-                        resp.raise_for_status()
-                        data = resp.json()
-                        log(f"  Worker returned {data.get('sources', 0)} source chunks.", "info")
-                        bot(data.get("answer", "No answer returned."))
-                    else:
-                        if not CF_ACCOUNT_ID or not CF_API_TOKEN:
-                            bot("Cloudflare credentials missing — can't query the knowledge base.")
-                            continue
-                        vec     = _embed_query(user_text)
-                        matches = _rag_search(vec, top_k=15, domains=all_domains)
-                        if matches:
-                            domains_hit = list({
-                                m.get("metadata", {}).get("domain") for m in matches
-                            })
-                            log(f"  {len(matches)} chunks from: {', '.join(domains_hit)}", "info")
-                            context = _build_rag_context(matches)
-                            log("  Synthesizing answer with Gemini...", "info")
-                            answer  = _rag_answer(user_text, context)
-                            bot(answer)
-                        else:
-                            bot("No relevant data found. Have the agents finished extracting?")
-                except Exception as e:
-                    bot(f"Query error: {e}")
+                    _gen_pdf(focus_text)
+                break  # one report per session
 
         out_q.put({"__done__": True})
 
@@ -1835,8 +1702,8 @@ async def pipeline_websocket(
         while True:
             try:
                 data = await websocket.receive_json()
-                if data.get("type") == "chat":
-                    in_q.put(data.get("text", ""))
+                if data.get("type") == "focus":
+                    in_q.put({"type": "focus", "text": data.get("text", "")})
             except Exception:
                 break
 

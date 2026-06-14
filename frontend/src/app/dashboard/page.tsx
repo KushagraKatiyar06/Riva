@@ -2,14 +2,13 @@
 
 import { useEffect, useRef, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Play, Pause, ArrowRight, Send, Download, Maximize2, Minimize2 } from 'lucide-react';
+import { Play, Pause, ArrowRight, Download, Maximize2, Minimize2 } from 'lucide-react';
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
 const WS_BASE  = API_BASE.replace(/^http/, 'ws');
 
 type Thought     = { text: string; state: string; ts: string };
 type PipelineLog = { text: string; state: string; ts: string };
-type ChatMsg     = { role: 'assistant' | 'user'; text: string; ts: string };
 
 const STATE_COLORS: Record<string, string> = {
   info:       '#8a8a9e',
@@ -328,19 +327,31 @@ function BrowserPanel({
         )}
 
         {stuckMilestone && !isComplete && (
-          <div className="absolute bottom-0 left-0 right-0 px-4 py-4 flex flex-col gap-2"
-            style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.95) 80%, transparent)' }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: '#c8a84a', letterSpacing: '1.5px',
-              fontFamily: "'DM Sans', sans-serif" }}>
-              ⚠ couldn&apos;t find {stuckMilestone}
+          <>
+            {/* Dim the viewport itself */}
+            <div className="absolute inset-0 pointer-events-none"
+              style={{ background: 'rgba(0,0,0,0.45)', transition: 'opacity 0.4s ease' }} />
+            {/* Fade-in prompt overlay */}
+            <div className="absolute bottom-0 left-0 right-0 px-4 py-5 flex flex-col gap-3"
+              style={{
+                background: 'linear-gradient(to top, rgba(0,0,0,0.98) 70%, transparent)',
+                animation: 'stuckFadeIn 0.55s cubic-bezier(0.22,1,0.36,1) both',
+              }}>
+              <div className="flex items-center gap-2">
+                <span style={{ fontSize: 13 }}>⚠</span>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#c8a84a', letterSpacing: '1.5px',
+                  fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase' }}>
+                  Your turn — couldn&apos;t find {stuckMilestone}
+                </div>
+              </div>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.75)', lineHeight: '18px',
+                fontFamily: "'DM Sans', sans-serif" }}>
+                Navigate to the{' '}
+                <span style={{ color: '#c8a84a', fontWeight: 700 }}>{stuckMilestone}</span>{' '}
+                page yourself, copy the URL, and paste it into the highlighted bar above — the agent will take it from there.
+              </div>
             </div>
-            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)', lineHeight: '18px',
-              fontFamily: "'DM Sans', sans-serif" }}>
-              Navigate to the{' '}
-              <span style={{ color: '#c8a84a', fontWeight: 600 }}>{stuckMilestone}</span>{' '}
-              page yourself, copy the URL, and paste it into the highlighted bar above — the agent will take it from there.
-            </div>
-          </div>
+          </>
         )}
 
         {isComplete && frameSrc && (
@@ -426,38 +437,52 @@ function InferenceLogPanel({
 }
 
 // ---------------------------------------------------------------------------
-// InlineChatPanel
+// FocusPanel — replaces chat; user describes what to compare, triggers PDF
 // ---------------------------------------------------------------------------
-function InlineChatPanel({
-  messages, onSend, pipelineReady, pipelineStatus, bottomExpanded, onToggleBottom,
+function FocusPanel({
+  onSubmit, pipelineStatus, reportGenerating, bottomExpanded, onToggleBottom,
 }: {
-  messages: ChatMsg[]; onSend: (text: string) => void;
-  pipelineReady: boolean; pipelineStatus: string;
-  bottomExpanded: boolean; onToggleBottom: () => void;
+  onSubmit: (focus: string) => void;
+  pipelineStatus: string;
+  reportGenerating: boolean;
+  bottomExpanded: boolean;
+  onToggleBottom: () => void;
 }) {
-  const [input, setInput] = useState('');
-  const bottomRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  const [focus, setFocus] = useState('');
+  const pipelineReady = pipelineStatus === 'ready';
 
-  const chatEyeState = pipelineStatus === 'vectorizing' ? 'scanning'
-    : pipelineStatus === 'ready' ? 'found' : 'info';
-
-  function send() {
-    if (!input.trim() || !pipelineReady) return;
-    onSend(input.trim());
-    setInput('');
+  function submit() {
+    if (!focus.trim() || !pipelineReady || reportGenerating) return;
+    onSubmit(focus.trim());
   }
+
+  const placeholder =
+    pipelineStatus === 'vectorizing' ? 'vectorizing data...' :
+    pipelineStatus === 'ready'       ? 'e.g. pricing tiers, developer experience, enterprise features...' :
+    'waiting for agents to finish...';
+
+  const statusLabel =
+    pipelineStatus === 'vectorizing' ? '⏳ indexing data — report will unlock when complete' :
+    pipelineStatus === 'ready'       ? 'data ready — describe your focus and generate the report' :
+    'waiting for browser agents...';
+
+  const statusColor =
+    pipelineStatus === 'vectorizing' ? '#c8a84a' :
+    pipelineStatus === 'ready'       ? '#6dc08a' :
+    '#3a3a4e';
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'rgba(0,0,0,0.18)' }}>
-      <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-white/5 shrink-0"
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/5 shrink-0"
         style={{ background: 'rgba(0,0,0,0.18)' }}>
         <div className="flex items-center gap-2">
-          <SmallEye color="#4db8ff" bgFill="#e0f7fa" darkFill="#001a2e" lidFill="#1a0d40"
-            glowId="chat-eye-glow" size={40} agentState={chatEyeState} />
+          <SmallEye color="#a064ff" bgFill="#ede0ff" darkFill="#180a30" lidFill="#1a0d40"
+            glowId="focus-eye-glow" size={40}
+            agentState={pipelineStatus === 'vectorizing' ? 'scanning' : pipelineStatus === 'ready' ? 'found' : 'info'} />
           <span style={{ color: 'rgba(255,255,255,0.8)', fontSize: 10, fontWeight: 500,
             letterSpacing: '0.5px', fontFamily: "'DM Sans', sans-serif" }}>
-            Riva Chat
+            Generate Report
           </span>
         </div>
         <button onClick={onToggleBottom} style={{ color: 'rgba(255,255,255,0.25)' }}
@@ -465,59 +490,68 @@ function InlineChatPanel({
           {bottomExpanded ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2.5 min-h-0"
-        style={{ fontFamily: "'Fira Code', monospace" }}>
-        {messages.length === 0 && (
-          <div style={{ fontSize: 10, color: '#2e2e3e', lineHeight: '19px' }}>
-            pipeline will message you when analysis is complete.
-          </div>
-        )}
-        {messages.map((m, i) => (
-          <div key={i} className={`flex flex-col gap-0.5 ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
-            <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: '1px',
-              color: m.role === 'assistant' ? '#9580c8' : 'rgba(255,255,255,0.4)',
-              fontFamily: "'DM Sans', sans-serif" }}>
-              {m.role === 'assistant' ? 'riva' : 'you'}
-            </div>
-            <div style={{
-              maxWidth: 260, padding: '5px 11px', borderRadius: 6, fontSize: 10,
-              lineHeight: '18px', whiteSpace: 'pre-wrap',
-              ...(m.role === 'assistant'
-                ? { background: 'rgba(149,128,200,0.09)', color: '#cec0e8', border: '1px solid rgba(149,128,200,0.14)' }
-                : { background: 'rgba(77,184,255,0.07)', color: 'rgba(255,255,255,0.9)', border: '1px solid rgba(77,184,255,0.12)' })
-            }}>
-              {m.text}
-            </div>
-            <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.15)' }}>{m.ts}</div>
-          </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
-      <div className="px-3 py-2 border-t border-white/5 shrink-0">
-        {!pipelineReady && (
-          <div style={{ fontSize: 9, color: '#3a3a4e', marginBottom: 5, fontFamily: "'DM Sans', sans-serif" }}>
-            available after vectorization
-          </div>
-        )}
-        <div className="flex gap-2">
-          <input className="flex-1 rounded px-3 py-1.5 outline-none"
-            style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.1)',
-              color: 'rgba(255,255,255,0.9)', fontSize: 10, fontFamily: "'Fira Code', monospace" }}
-            placeholder={pipelineReady ? 'ask something...' : 'waiting...'}
-            value={input}
-            disabled={!pipelineReady}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }}
-          />
-          <button onClick={send} disabled={!pipelineReady || !input.trim()}
-            className="p-1.5 rounded transition-all"
-            style={{
-              background: pipelineReady && input.trim() ? 'rgba(149,128,200,0.2)' : 'rgba(255,255,255,0.04)',
-              color:      pipelineReady && input.trim() ? '#9580c8' : 'rgba(255,255,255,0.15)',
-            }}>
-            <Send size={12} />
-          </button>
+
+      {/* Body */}
+      <div className="flex-1 flex flex-col justify-center px-4 py-3 gap-3">
+        {/* Status line */}
+        <div style={{ fontSize: 9, fontFamily: "'DM Sans', sans-serif", color: statusColor,
+          letterSpacing: '0.3px' }}>
+          {statusLabel}
         </div>
+
+        {/* Prompt label */}
+        <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '2px', textTransform: 'uppercase',
+          color: 'rgba(200,170,255,0.45)', fontFamily: "'DM Sans', sans-serif" }}>
+          What should this report focus on?
+        </div>
+
+        {/* Text area */}
+        <textarea
+          rows={3}
+          value={focus}
+          onChange={e => setFocus(e.target.value)}
+          disabled={!pipelineReady || reportGenerating}
+          placeholder={placeholder}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }}
+          className="rounded-lg px-3 py-2 outline-none resize-none"
+          style={{
+            background: 'rgba(0,0,0,0.35)',
+            border: `1px solid ${pipelineReady ? 'rgba(160,100,255,0.35)' : pipelineStatus === 'vectorizing' ? 'rgba(200,168,74,0.25)' : 'rgba(255,255,255,0.08)'}`,
+            color: 'rgba(255,255,255,0.85)',
+            fontSize: 10,
+            fontFamily: "'Fira Code', monospace",
+            lineHeight: '18px',
+          }}
+        />
+
+        {/* Examples */}
+        {pipelineReady && !reportGenerating && (
+          <div className="flex flex-wrap gap-1.5">
+            {['pricing tiers', 'developer experience', 'enterprise features', 'onboarding flow'].map(ex => (
+              <button key={ex} onClick={() => setFocus(ex)}
+                className="px-2 py-0.5 rounded text-[9px] transition-all"
+                style={{ background: 'rgba(160,100,255,0.08)', border: '1px solid rgba(160,100,255,0.2)',
+                  color: 'rgba(200,170,255,0.55)', fontFamily: "'DM Sans', sans-serif" }}>
+                {ex}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Submit */}
+        <button
+          onClick={submit}
+          disabled={!pipelineReady || !focus.trim() || reportGenerating}
+          className="self-end px-4 py-1.5 rounded-lg text-[10px] font-bold tracking-[2px] uppercase transition-all"
+          style={{
+            background: pipelineReady && focus.trim() && !reportGenerating ? 'rgba(160,100,255,0.18)' : 'rgba(255,255,255,0.04)',
+            border: `1px solid ${pipelineReady && focus.trim() && !reportGenerating ? 'rgba(160,100,255,0.5)' : 'rgba(255,255,255,0.08)'}`,
+            color: pipelineReady && focus.trim() && !reportGenerating ? '#c8aaff' : 'rgba(255,255,255,0.2)',
+            cursor: pipelineReady && focus.trim() && !reportGenerating ? 'pointer' : 'not-allowed',
+            fontFamily: "'DM Sans', sans-serif",
+          }}>
+          {reportGenerating ? 'generating...' : '→ generate pdf'}
+        </button>
       </div>
     </div>
   );
@@ -643,8 +677,13 @@ function DashboardContent() {
   const router       = useRouter();
   const rivaUrl      = searchParams.get('riva') || '';
   const compUrl      = searchParams.get('comp') || '';
+  const runId        = searchParams.get('run_id') || '';
 
-  const storageKey = `riva-session:${rivaUrl}|${compUrl}`;
+  // Include run_id in storage key so each new submission gets a fresh session.
+  // History/restore only happens when run_id is absent (e.g. user navigates back manually).
+  const storageKey = runId
+    ? `riva-session:${runId}`
+    : `riva-session:${rivaUrl}|${compUrl}`;
 
   const sessionIdRef    = useRef(crypto.randomUUID());
   // Ref checked synchronously in WS effects before state update propagates
@@ -666,8 +705,9 @@ function DashboardContent() {
 
   // Check sessionStorage FIRST. Sets isRestoringRef synchronously so WS effects
   // read the correct value when storageChecked flips to true.
+  // If run_id is in the URL this is always a fresh run — skip restore entirely.
   useEffect(() => {
-    if (rivaUrl || compUrl) {
+    if (!runId && (rivaUrl || compUrl)) {
       try {
         const raw = sessionStorage.getItem(storageKey);
         if (raw) {
@@ -681,11 +721,14 @@ function DashboardContent() {
           if (saved.compComplete)  setCompComplete(saved.compComplete);
           if (saved.pipelineLogs)  setPipelineLogs(saved.pipelineLogs);
           if (saved.reports?.length) setReports(saved.reports);
-          if (saved.chatMessages)  setChatMessages(saved.chatMessages);
           setRivaWsState('closed');
           setCompWsState('closed');
         }
       } catch { /* ignore */ }
+    }
+    // Clear stale URL-pair session so a future manual navigation doesn't restore stale data
+    if (runId) {
+      try { sessionStorage.removeItem(`riva-session:${rivaUrl}|${compUrl}`); } catch {}
     }
     setStorageChecked(true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -696,14 +739,14 @@ function DashboardContent() {
   const [rivaStuckMilestone, setRivaStuckMilestone] = useState<string | null>(null);
   const [compStuckMilestone, setCompStuckMilestone] = useState<string | null>(null);
 
-  const [pipelineLogs,   setPipelineLogs]   = useState<PipelineLog[]>([]);
-  const [pipelineStatus, setPipelineStatus] = useState<'waiting'|'vectorizing'|'ready'>('waiting');
-  const [reports,        setReports]        = useState<ReportEntry[]>([]);
-  const [chatMessages,   setChatMessages]   = useState<ChatMsg[]>([]);
-  const [rivaCanSkip,    setRivaCanSkip]    = useState(false);
-  const [compCanSkip,    setCompCanSkip]    = useState(false);
-  const [logsExpanded,   setLogsExpanded]   = useState(true);
-  const [bottomExpanded, setBottomExpanded] = useState(false);
+  const [pipelineLogs,     setPipelineLogs]     = useState<PipelineLog[]>([]);
+  const [pipelineStatus,   setPipelineStatus]   = useState<'waiting'|'vectorizing'|'ready'>('waiting');
+  const [reports,          setReports]          = useState<ReportEntry[]>([]);
+  const [reportGenerating, setReportGenerating] = useState(false);
+  const [rivaCanSkip,      setRivaCanSkip]      = useState(false);
+  const [compCanSkip,      setCompCanSkip]      = useState(false);
+  const [logsExpanded,     setLogsExpanded]     = useState(true);
+  const [bottomExpanded,   setBottomExpanded]   = useState(false);
 
   // Persist UI state
   useEffect(() => {
@@ -711,11 +754,11 @@ function DashboardContent() {
     try {
       sessionStorage.setItem(storageKey, JSON.stringify({
         sessionId, rivaComplete, compComplete, rivaFrame, compFrame,
-        chatMessages, pipelineLogs, pipelineStatus, reports,
+        pipelineLogs, pipelineStatus, reports,
       }));
     } catch {}
   }, [sessionId, rivaComplete, compComplete, rivaFrame, compFrame,
-      chatMessages, pipelineLogs, pipelineStatus, reports]); // eslint-disable-line react-hooks/exhaustive-deps
+      pipelineLogs, pipelineStatus, reports]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Check if domains are already vectorized (skip button + hint)
   useEffect(() => {
@@ -765,10 +808,10 @@ function DashboardContent() {
     pipelineWsRef.current = ws;
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'log')          setPipelineLogs(p => [...p, { text: msg.text, state: msg.state, ts: now() }]);
-      else if (msg.type === 'chat')    setChatMessages(p => [...p, { role: 'assistant', text: msg.text, ts: now() }]);
-      else if (msg.type === 'status')  setPipelineStatus(msg.value);
+      if (msg.type === 'log')         setPipelineLogs(p => [...p, { text: msg.text, state: msg.state, ts: now() }]);
+      else if (msg.type === 'status') setPipelineStatus(msg.value);
       else if (msg.type === 'report_ready') {
+        setReportGenerating(false);
         setReports(prev => [...prev, {
           type: msg.report_type as 'pdf' | 'pptx',
           url: msg.url,
@@ -789,6 +832,7 @@ function DashboardContent() {
     rivaWsRef.current = ws;
     ws.onopen    = () => { setRivaWsState('open'); ws.send(JSON.stringify({ url: rivaUrl })); };
     ws.onclose   = () => setRivaWsState('closed');
+    ws.onerror   = () => { setRivaWsState('closed'); setRivaThoughts(p => [...p, { text: 'WebSocket connection failed — is the backend running?', state: 'error', ts: now() }]); };
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       if (msg.type === 'frame')               setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
@@ -809,6 +853,7 @@ function DashboardContent() {
     compWsRef.current = ws;
     ws.onopen    = () => { setCompWsState('open'); ws.send(JSON.stringify({ url: compUrl })); };
     ws.onclose   = () => setCompWsState('closed');
+    ws.onerror   = () => { setCompWsState('closed'); setCompThoughts(p => [...p, { text: 'WebSocket connection failed — is the backend running?', state: 'error', ts: now() }]); };
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       if (msg.type === 'frame')               setCompFrame(`data:image/jpeg;base64,${msg.data}`);
@@ -862,12 +907,10 @@ function DashboardContent() {
     };
   }
 
-  function sendChat(text: string) {
-    setChatMessages(p => [...p, { role: 'user', text, ts: now() }]);
-    sendToWs(pipelineWsRef, { type: 'chat', text });
+  function submitFocus(focus: string) {
+    setReportGenerating(true);
+    sendToWs(pipelineWsRef, { type: 'focus', text: focus });
   }
-
-  const pipelineReady = pipelineStatus === 'ready';
 
   function hostname(url: string) {
     try { return new URL(url).hostname; } catch { return url; }
@@ -892,6 +935,10 @@ function DashboardContent() {
         @keyframes pulseStuckBorder {
           0%, 100% { box-shadow: 0 0 0 0 rgba(200,168,74,0.6), 0 0 0 0 rgba(200,168,74,0); }
           50%       { box-shadow: 0 0 0 3px rgba(200,168,74,0.3), 0 0 16px 4px rgba(200,168,74,0.12); }
+        }
+        @keyframes stuckFadeIn {
+          0%   { opacity: 0; transform: translateY(12px); }
+          100% { opacity: 1; transform: translateY(0); }
         }
       `}</style>
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" />
@@ -1013,10 +1060,10 @@ function DashboardContent() {
               )}
             </div>
 
-            {/* Bottom: inference logs + chat */}
+            {/* Bottom: inference logs + focus/report panel */}
             <div className="flex flex-col sm:flex-row shrink-0 rounded-lg overflow-hidden mb-3"
               style={{
-                height: bottomExpanded ? 400 : 220,
+                height: bottomExpanded ? 400 : 240,
                 transition: 'height 0.25s ease',
                 border: '1px solid rgba(255,255,255,0.1)',
               }}>
@@ -1025,10 +1072,13 @@ function DashboardContent() {
                   hasReports={reports.length > 0}
                   bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
               </div>
-              <div className="flex-1 min-w-0">
-                <InlineChatPanel messages={chatMessages} onSend={sendChat}
-                  pipelineReady={pipelineReady} pipelineStatus={pipelineStatus}
-                  bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
+              <div className="flex-1 min-w-0" style={{ borderLeft: '1px solid rgba(255,255,255,0.06)' }}>
+                <FocusPanel
+                  onSubmit={submitFocus}
+                  pipelineStatus={pipelineStatus}
+                  reportGenerating={reportGenerating}
+                  bottomExpanded={bottomExpanded}
+                  onToggleBottom={() => setBottomExpanded(v => !v)} />
               </div>
             </div>
           </div>

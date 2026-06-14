@@ -56,7 +56,7 @@ async function downloadBlob(href: string, filename: string) {
 }
 
 // ── Website-type popup ───────────────────────────────────────────────────────
-function SiteTypePopup({ onClose }: { onClose: () => void }) {
+function SiteTypePopup({ onClose, onConfirm }: { onClose: () => void; onConfirm?: () => void }) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -80,20 +80,25 @@ function SiteTypePopup({ onClose }: { onClose: () => void }) {
           <X size={16} />
         </button>
 
-        <p className="text-xs font-bold tracking-[4px] uppercase mb-4" style={{ color: '#a064ff' }}>
-          What websites work best?
+        <p className="text-xs font-bold tracking-[4px] uppercase mb-2" style={{ color: '#a064ff' }}>
+          Before you start
         </p>
 
-        <p className="text-sm leading-relaxed mb-5" style={{ color: 'rgba(200,170,255,0.75)' }}>
-          RIVA works best on <strong style={{ color: '#c8aaff' }}>B2B SaaS / developer-tool websites</strong> that
-          have clearly structured pricing pages and public documentation.
-        </p>
+        {/* Requirement callout */}
+        <div className="rounded-xl px-4 py-3 mb-5" style={{ background: 'rgba(160,100,255,0.07)', border: '1px solid rgba(160,100,255,0.25)' }}>
+          <p className="text-xs font-bold mb-1" style={{ color: '#c8aaff' }}>Both sites must be:</p>
+          <ul className="text-xs space-y-1" style={{ color: 'rgba(200,170,255,0.7)' }}>
+            <li>✦ <strong style={{ color: '#c8aaff' }}>Tech / B2B SaaS</strong> products</li>
+            <li>✦ Have a <strong style={{ color: '#c8aaff' }}>public pricing page</strong></li>
+            <li>✦ Have <strong style={{ color: '#c8aaff' }}>public documentation</strong></li>
+          </ul>
+        </div>
 
         <div className="flex gap-3 mb-5">
           {/* Good example */}
           <div className="flex-1 rounded-xl p-4" style={{ background: 'rgba(109,192,138,0.08)', border: '1px solid rgba(109,192,138,0.25)' }}>
             <p className="text-[10px] font-bold tracking-[3px] uppercase mb-2" style={{ color: '#6dc08a' }}>Works great</p>
-            <p className="text-xs font-bold mb-1" style={{ color: '#c8aaff' }}>railway.app vs vercel.com</p>
+            <p className="text-xs font-bold mb-1" style={{ color: '#c8aaff' }}>vercel.com vs railway.app</p>
             <ul className="text-xs space-y-1" style={{ color: 'rgba(200,170,255,0.6)' }}>
               <li>✓ Clear pricing tiers</li>
               <li>✓ Public documentation</li>
@@ -104,26 +109,26 @@ function SiteTypePopup({ onClose }: { onClose: () => void }) {
 
           {/* Bad example */}
           <div className="flex-1 rounded-xl p-4" style={{ background: 'rgba(212,96,96,0.08)', border: '1px solid rgba(212,96,96,0.25)' }}>
-            <p className="text-[10px] font-bold tracking-[3px] uppercase mb-2" style={{ color: '#d46060' }}>Doesn't work well</p>
+            <p className="text-[10px] font-bold tracking-[3px] uppercase mb-2" style={{ color: '#d46060' }}>Doesn&apos;t work</p>
             <ul className="text-xs space-y-1" style={{ color: 'rgba(200,170,255,0.6)' }}>
-              <li>✗ E-commerce / retail sites</li>
+              <li>✗ E-commerce / retail</li>
               <li>✗ News or media sites</li>
-              <li>✗ Sites with no pricing page</li>
+              <li>✗ No public pricing page</li>
               <li>✗ Login-gated products</li>
             </ul>
           </div>
         </div>
 
         <button
-          onClick={onClose}
+          onClick={onConfirm ?? onClose}
           className="w-full py-2.5 rounded-lg text-xs font-bold tracking-[4px] uppercase transition-all"
           style={{
-            background: 'rgba(160,100,255,0.12)',
+            background: onConfirm ? 'rgba(160,100,255,0.2)' : 'rgba(160,100,255,0.12)',
             border: '1px solid rgba(160,100,255,0.4)',
             color: '#c8aaff',
           }}
         >
-          Got it
+          {onConfirm ? 'Got it — start analysis' : 'Got it'}
         </button>
       </div>
     </div>
@@ -137,6 +142,7 @@ type ClearPreview = {
   report_files:  { filename: string; size: number; type: string }[];
   run_count:     number;
   session_count: number;
+  cf_vectors:    number | null;
 };
 
 function ClearModal({ onClose, onCleared }: { onClose: () => void; onCleared: () => void }) {
@@ -166,8 +172,12 @@ function ClearModal({ onClose, onCleared }: { onClose: () => void; onCleared: ()
       });
       if (resp.status === 401) { setError('Incorrect password.'); setClearing(false); return; }
       if (!resp.ok) { setError('Server error — try again.'); setClearing(false); return; }
+      const result = await resp.json();
       setDone(true);
       onCleared();
+      if (result.index_error) {
+        setError(`⚠ Local data cleared, but Cloudflare index wipe failed: ${result.index_error}`);
+      }
     } catch {
       setError('Request failed — server may be unreachable.');
       setClearing(false);
@@ -231,7 +241,9 @@ function ClearModal({ onClose, onCleared }: { onClose: () => void; onCleared: ()
                       Indexed domains
                     </span>
                     <span className="text-[10px]" style={{ color: 'rgba(200,170,255,0.35)' }}>
-                      ~{preview.total_vectors} vectors total
+                      {preview.cf_vectors != null
+                        ? <><span style={{ color: '#6dc08a' }}>{preview.cf_vectors.toLocaleString()}</span> live in CF · ~{preview.total_vectors} local</>
+                        : `~${preview.total_vectors} vectors`}
                     </span>
                   </div>
                   {preview.domains.map(d => (
@@ -346,6 +358,61 @@ function ClearModal({ onClose, onCleared }: { onClose: () => void; onCleared: ()
 }
 
 // ── History tab ──────────────────────────────────────────────────────────────
+
+/** Try to match reports to a run by checking if the report filename contains the domain slugs. */
+function matchReports(run: RunEntry, reports: ReportFile[]): ReportFile[] {
+  const slugs = [run.riva_url, run.comp_url]
+    .filter(Boolean)
+    .map(u => hostname(u).replace(/[^a-z0-9]/gi, '').toLowerCase());
+  if (!slugs.length) return [];
+  return reports.filter(r =>
+    slugs.some(s => r.filename.toLowerCase().includes(s))
+  );
+}
+
+function ReportBadge({ r }: { r: ReportFile }) {
+  return (
+    <div
+      className="flex items-center justify-between px-4 py-3 rounded-xl"
+      style={{ border: '1px solid rgba(160,100,255,0.15)', background: 'rgba(0,0,0,0.3)' }}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span
+            className="text-[9px] font-bold tracking-[2px] uppercase px-1.5 py-0.5 rounded shrink-0"
+            style={{
+              background: r.type === 'pptx' ? 'rgba(212,135,74,0.15)' : 'rgba(109,192,138,0.12)',
+              color:      r.type === 'pptx' ? '#d4874a'               : '#6dc08a',
+              border:     `1px solid ${r.type === 'pptx' ? 'rgba(212,135,74,0.3)' : 'rgba(109,192,138,0.25)'}`,
+            }}
+          >
+            {r.type}
+          </span>
+          <span className="text-xs truncate" style={{ color: 'rgba(200,170,255,0.65)', fontFamily: "'Fira Code', monospace" }}>
+            {r.filename}
+          </span>
+        </div>
+        <div className="flex gap-3 mt-1">
+          <span className="text-[10px]" style={{ color: 'rgba(200,170,255,0.3)' }}>{formatBytes(r.size)}</span>
+          <span className="text-[10px]" style={{ color: 'rgba(200,170,255,0.3)' }}>{formatDate(r.modified)}</span>
+        </div>
+      </div>
+      <button
+        onClick={() => downloadBlob(`${API_BASE}${r.url}`, r.filename)}
+        className="flex items-center gap-1.5 ml-4 px-3 py-1.5 rounded-lg text-[10px] font-bold tracking-[2px] uppercase transition-all shrink-0"
+        style={{
+          background: 'rgba(109,192,138,0.08)',
+          border: '1px solid rgba(109,192,138,0.25)',
+          color: '#6dc08a',
+        }}
+      >
+        <Download size={10} />
+        download
+      </button>
+    </div>
+  );
+}
+
 function HistoryTab({
   runs, reports, onRefresh,
 }: {
@@ -353,8 +420,25 @@ function HistoryTab({
   reports: ReportFile[];
   onRefresh: () => void;
 }) {
-  const [expanded,      setExpanded]      = useState<Set<string>>(new Set());
-  const [showClearModal, setShowClearModal] = useState(false);
+  const [expanded,       setExpanded]       = useState<Set<string>>(new Set());
+  const [showClearModal, setShowClearModal]  = useState(false);
+  const [cfVectors,      setCfVectors]       = useState<number | null>(null);
+  const [cfLoading,      setCfLoading]       = useState(true);
+
+  function fetchCfCount() {
+    setCfLoading(true);
+    fetch(`${API_BASE}/clear-preview`)
+      .then(r => r.json())
+      .then(d => { setCfVectors(d.cf_vectors ?? null); setCfLoading(false); })
+      .catch(() => setCfLoading(false));
+  }
+
+  useEffect(() => { fetchCfCount(); }, []);
+
+  function handleRefresh() {
+    fetchCfCount();
+    onRefresh();
+  }
 
   function toggle(id: string) {
     setExpanded(prev => {
@@ -364,23 +448,29 @@ function HistoryTab({
     });
   }
 
+  // Reports that aren't matched to any run
+  const matchedReportNames = new Set(
+    runs.flatMap(run => matchReports(run, reports).map(r => r.filename))
+  );
+  const unmatchedReports = reports.filter(r => !matchedReportNames.has(r.filename));
+
   return (
     <div className="w-full max-w-3xl">
       {showClearModal && (
         <ClearModal
           onClose={() => setShowClearModal(false)}
-          onCleared={() => { onRefresh(); }}
+          onCleared={() => { fetchCfCount(); onRefresh(); }}
         />
       )}
 
       {/* Header row */}
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between mb-4">
         <p className="text-xs font-bold tracking-[3px] uppercase" style={{ color: 'rgba(200,170,255,0.4)' }}>
           Session history
         </p>
         <div className="flex items-center gap-2">
           <button
-            onClick={onRefresh}
+            onClick={handleRefresh}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold tracking-[2px] uppercase transition-all"
             style={{ border: '1px solid rgba(160,100,255,0.25)', color: 'rgba(200,170,255,0.5)' }}
           >
@@ -398,19 +488,62 @@ function HistoryTab({
         </div>
       </div>
 
+      {/* CF vector count stat */}
+      <div className="flex items-center gap-2 mb-5 px-3 py-2 rounded-lg"
+        style={{ background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(160,100,255,0.1)' }}>
+        <span className="text-[10px] tracking-[1px] uppercase" style={{ color: 'rgba(200,170,255,0.35)' }}>
+          Cloudflare Vectorize
+        </span>
+        <span className="text-[10px] font-bold ml-auto" style={{
+          color: cfLoading ? 'rgba(200,170,255,0.3)' : cfVectors === 0 ? '#6dc08a' : cfVectors != null ? '#c8aaff' : 'rgba(200,170,255,0.3)'
+        }}>
+          {cfLoading ? '…' : cfVectors != null ? `${cfVectors.toLocaleString()} vectors` : 'unavailable'}
+        </span>
+        {!cfLoading && cfVectors === 0 && (
+          <span className="text-[9px]" style={{ color: '#6dc08a' }}>✓ empty</span>
+        )}
+      </div>
+
+      {/* Standalone reports section — always visible */}
+      <div className="mb-8">
+        <p className="text-xs font-bold tracking-[3px] uppercase mb-3" style={{ color: 'rgba(200,170,255,0.4)' }}>
+          Generated reports
+          {reports.length > 0 && (
+            <span className="ml-2 text-[10px] normal-case tracking-normal font-normal" style={{ color: 'rgba(200,170,255,0.3)' }}>
+              ({reports.length} file{reports.length !== 1 ? 's' : ''})
+            </span>
+          )}
+        </p>
+        {reports.length === 0 ? (
+          <div className="rounded-xl px-4 py-5 text-center" style={{ border: '1px dashed rgba(160,100,255,0.12)', background: 'rgba(0,0,0,0.15)' }}>
+            <p className="text-xs" style={{ color: 'rgba(200,170,255,0.25)' }}>
+              Reports will appear here after an analysis completes.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {reports.map(r => <ReportBadge key={r.filename} r={r} />)}
+          </div>
+        )}
+      </div>
+
       {/* Runs list */}
+      <p className="text-xs font-bold tracking-[3px] uppercase mb-3" style={{ color: 'rgba(200,170,255,0.4)' }}>
+        Analysis runs
+      </p>
       {runs.length === 0 ? (
         <p className="text-xs text-center py-8" style={{ color: 'rgba(200,170,255,0.25)' }}>
           No sessions yet.
         </p>
       ) : (
-        <div className="flex flex-col gap-2 mb-8">
+        <div className="flex flex-col gap-2">
           {runs.map(run => {
             const open = expanded.has(run.id);
             const label = [run.riva_url, run.comp_url]
               .filter(Boolean)
               .map(hostname)
               .join('  ·  ');
+            const runReports = matchReports(run, reports);
             return (
               <div
                 key={run.id}
@@ -439,15 +572,22 @@ function HistoryTab({
                       {label || '(no URLs)'}
                     </span>
                   </div>
-                  <span className="text-[10px] shrink-0 ml-3" style={{ color: 'rgba(200,170,255,0.3)' }}>
-                    {formatDate(run.started_at)}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0 ml-3">
+                    {runReports.length > 0 && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ background: 'rgba(109,192,138,0.12)', color: '#6dc08a', border: '1px solid rgba(109,192,138,0.25)' }}>
+                        {runReports.length} report{runReports.length > 1 ? 's' : ''}
+                      </span>
+                    )}
+                    <span className="text-[10px]" style={{ color: 'rgba(200,170,255,0.3)' }}>
+                      {formatDate(run.started_at)}
+                    </span>
+                  </div>
                 </button>
 
                 {/* Expanded detail */}
                 {open && (
                   <div
-                    className="px-4 pb-3 flex flex-col gap-2"
+                    className="px-4 pb-4 flex flex-col gap-2"
                     style={{ borderTop: '1px solid rgba(160,100,255,0.1)' }}
                   >
                     {run.riva_url && (
@@ -470,6 +610,15 @@ function HistoryTab({
                         </span>
                       </div>
                     )}
+                    {/* Matched reports for this run */}
+                    {runReports.length > 0 && (
+                      <div className="mt-2 flex flex-col gap-1.5">
+                        <p className="text-[9px] font-bold tracking-[2px] uppercase" style={{ color: 'rgba(200,170,255,0.3)' }}>
+                          Reports
+                        </p>
+                        {runReports.map(r => <ReportBadge key={r.filename} r={r} />)}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -478,74 +627,135 @@ function HistoryTab({
         </div>
       )}
 
-      {/* Generated files */}
-      {reports.length > 0 && (
-        <>
-          <p className="text-xs font-bold tracking-[3px] uppercase mb-3" style={{ color: 'rgba(200,170,255,0.4)' }}>
-            Generated files
+      {/* Unmatched reports (no run association found) */}
+      {unmatchedReports.length > 0 && (
+        <div className="mt-6">
+          <p className="text-xs font-bold tracking-[3px] uppercase mb-3" style={{ color: 'rgba(200,170,255,0.25)' }}>
+            Other reports
           </p>
           <div className="flex flex-col gap-2">
-            {reports.map(r => (
-              <div
-                key={r.filename}
-                className="flex items-center justify-between px-4 py-3 rounded-xl"
-                style={{ border: '1px solid rgba(160,100,255,0.15)', background: 'rgba(0,0,0,0.3)' }}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="text-[9px] font-bold tracking-[2px] uppercase px-1.5 py-0.5 rounded"
-                      style={{
-                        background: r.type === 'pptx' ? 'rgba(212,135,74,0.15)' : 'rgba(109,192,138,0.12)',
-                        color:      r.type === 'pptx' ? '#d4874a'               : '#6dc08a',
-                        border:     `1px solid ${r.type === 'pptx' ? 'rgba(212,135,74,0.3)' : 'rgba(109,192,138,0.25)'}`,
-                      }}
-                    >
-                      {r.type}
-                    </span>
-                    <span className="text-xs truncate" style={{ color: 'rgba(200,170,255,0.65)', fontFamily: "'Fira Code', monospace" }}>
-                      {r.filename}
-                    </span>
-                  </div>
-                  <div className="flex gap-3 mt-1">
-                    <span className="text-[10px]" style={{ color: 'rgba(200,170,255,0.3)' }}>{formatBytes(r.size)}</span>
-                    <span className="text-[10px]" style={{ color: 'rgba(200,170,255,0.3)' }}>{formatDate(r.modified)}</span>
-                  </div>
-                </div>
-                <button
-                  onClick={() => downloadBlob(`${API_BASE}${r.url}`, r.filename)}
-                  className="flex items-center gap-1.5 ml-4 px-3 py-1.5 rounded-lg text-[10px] font-bold tracking-[2px] uppercase transition-all shrink-0"
-                  style={{
-                    background: 'rgba(109,192,138,0.08)',
-                    border: '1px solid rgba(109,192,138,0.25)',
-                    color: '#6dc08a',
-                  }}
-                >
-                  <Download size={10} />
-                  download
-                </button>
-              </div>
-            ))}
+            {unmatchedReports.map(r => <ReportBadge key={r.filename} r={r} />)}
           </div>
-        </>
-      )}
-
-      {runs.length === 0 && reports.length === 0 && (
-        <p className="text-xs text-center py-4" style={{ color: 'rgba(200,170,255,0.2)' }}>
-          Generated reports will appear here.
-        </p>
+        </div>
       )}
     </div>
   );
 }
 
+// ── Admin unlock modal (secret red-eye) ─────────────────────────────────────
+function AdminModal({ onClose, onUnlocked }: { onClose: () => void; onUnlocked: (pw: string) => void }) {
+  const [pw,      setPw]      = useState('');
+  const [error,   setError]   = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function verify() {
+    if (!pw.trim()) return;
+    setLoading(true);
+    setError('');
+    try {
+      const resp = await fetch(`${API_BASE}/admin/verify`, {
+        headers: { 'x-admin-password': pw.trim() },
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        onUnlocked(pw.trim());
+        onClose();
+      } else {
+        setError('Incorrect password.');
+      }
+    } catch {
+      setError('Could not reach server.');
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(6px)' }}
+      onClick={onClose}
+    >
+      <div
+        className="relative w-80 rounded-2xl p-6"
+        style={{
+          background: 'linear-gradient(135deg, #1a0810 0%, #200a14 100%)',
+          border: '1px solid rgba(212,96,96,0.35)',
+          boxShadow: '0 0 60px rgba(212,96,96,0.12)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <button onClick={onClose} className="absolute top-4 right-4 opacity-30 hover:opacity-70 transition-opacity" style={{ color: '#ff6b6b' }}>
+          <X size={14} />
+        </button>
+
+        {/* Small red eye */}
+        <div className="flex justify-center mb-4">
+          <svg viewBox="0 0 80 48" style={{ width: 48, overflow: 'visible' }}>
+            <defs><clipPath id="admin-eye-clip"><path d="M3,24 Q40,-7 77,24 Q40,55 3,24" /></clipPath></defs>
+            <g clipPath="url(#admin-eye-clip)">
+              <path d="M3,24 Q40,-7 77,24 Q40,55 3,24" fill="#fbe9e7" />
+              <circle cx="40" cy="24" r="14" fill="#330000" />
+              <circle cx="40" cy="24" r="5" fill="#ff3333" style={{ filter: 'drop-shadow(0 0 6px #ff3333)' }} />
+            </g>
+          </svg>
+        </div>
+
+        <p className="text-[10px] font-bold tracking-[4px] uppercase text-center mb-5" style={{ color: 'rgba(255,107,107,0.6)' }}>
+          Admin access
+        </p>
+
+        {error && <p className="text-[10px] mb-3 text-center" style={{ color: '#d46060' }}>{error}</p>}
+
+        <div className="flex gap-2">
+          <input
+            type="password"
+            value={pw}
+            onChange={e => { setPw(e.target.value); setError(''); }}
+            onKeyDown={e => { if (e.key === 'Enter') verify(); }}
+            placeholder="password"
+            autoFocus
+            className="flex-1 rounded-lg px-3 py-2 text-xs outline-none"
+            style={{
+              background: 'rgba(0,0,0,0.5)',
+              border: `1px solid ${error ? 'rgba(212,96,96,0.6)' : 'rgba(212,96,96,0.25)'}`,
+              color: 'white',
+              caretColor: '#ff6b6b',
+            }}
+          />
+          <button
+            onClick={verify}
+            disabled={loading || !pw.trim()}
+            className="px-4 py-2 rounded-lg text-[10px] font-bold tracking-[2px] uppercase shrink-0 transition-all"
+            style={{
+              background: 'rgba(212,96,96,0.14)',
+              border: '1px solid rgba(212,96,96,0.4)',
+              color: '#ff6b6b',
+              opacity: loading || !pw.trim() ? 0.4 : 1,
+              cursor: loading || !pw.trim() ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {loading ? '…' : 'unlock'}
+          </button>
+        </div>
+        <p className="text-[9px] mt-3 text-center" style={{ color: 'rgba(255,107,107,0.25)' }}>
+          bypasses daily run limit
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ────────────────────────────────────────────────────────────────
+const ADMIN_STORAGE_KEY = 'riva-admin-pw';
+
 export default function Home() {
   const router = useRouter();
   const [rivaUrl, setRivaUrl] = useState('');
   const [compUrl, setCompUrl] = useState('');
   const [activeTab, setActiveTab]   = useState<'new' | 'history'>('new');
   const [showPopup, setShowPopup]   = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [adminPw, setAdminPw] = useState('');
   const [runsUsed, setRunsUsed]     = useState(0);
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
@@ -553,13 +763,28 @@ export default function Home() {
   const [reports, setReports] = useState<ReportFile[]>([]);
   // clearLoading is now inside ClearModal
 
-  const popupShownRef = useRef(false);
   const rivaPupilRef  = useRef<SVGGElement>(null);
   const rivaLidRef    = useRef<SVGRectElement>(null);
   const compPupilRef  = useRef<SVGGElement>(null);
   const compLidRef    = useRef<SVGRectElement>(null);
   const smileRef      = useRef<SVGPathElement>(null);
   const ctaRef        = useRef<HTMLDivElement>(null);
+
+  // Load persisted admin password
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(ADMIN_STORAGE_KEY);
+      if (saved) setAdminPw(saved);
+    } catch {}
+  }, []);
+
+  const isAdmin = !!adminPw;
+
+  function adminHeaders() {
+    const h: Record<string, string> = { ...clientHeaders() };
+    if (adminPw) h['x-admin-password'] = adminPw;
+    return h;
+  }
 
   // Fetch daily limit
   const fetchLimit = useCallback(() => {
@@ -588,22 +813,6 @@ export default function Home() {
     return () => clearInterval(iv);
   }, [fetchLimit, fetchHistory]);
 
-  // Show popup when user scrolls into the input section
-  useEffect(() => {
-    const section = document.getElementById('input-section');
-    if (!section) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting && !popupShownRef.current) {
-          popupShownRef.current = true;
-          setShowPopup(true);
-        }
-      },
-      { threshold: 0.35 },
-    );
-    observer.observe(section);
-    return () => observer.disconnect();
-  }, []);
 
   // Sentient eye loops
   useEffect(() => {
@@ -655,15 +864,23 @@ export default function Home() {
     document.getElementById('input-section')?.scrollIntoView({ behavior: 'smooth' });
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  // Phase 1: validate inputs and show the site-type reminder popup
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!rivaUrl.trim() && !compUrl.trim()) return;
-    if (runsUsed >= DAILY_LIMIT) return;
+    if (!isAdmin && runsUsed >= DAILY_LIMIT) return;
+    setShowPopup(true);
+  }
+
+  // Phase 2: called when user clicks "Got it" in the popup
+  async function doSubmit() {
+    setShowPopup(false);
     setSubmitLoading(true);
+    let runId = crypto.randomUUID();
     try {
       const resp = await fetch(`${API_BASE}/start-run`, {
         method: 'POST',
-        headers: clientHeaders(),
+        headers: adminHeaders(),
         body: JSON.stringify({ riva_url: rivaUrl.trim(), comp_url: compUrl.trim() }),
       });
       if (resp.status === 429) {
@@ -672,6 +889,7 @@ export default function Home() {
         return;
       }
       const data = await resp.json();
+      if (data.run_id) runId = data.run_id;
       setRunsUsed(data.used ?? runsUsed + 1);
       fetchHistory();
     } catch {
@@ -681,17 +899,28 @@ export default function Home() {
     const params = new URLSearchParams();
     if (rivaUrl.trim()) params.set('riva', rivaUrl.trim());
     if (compUrl.trim()) params.set('comp', compUrl.trim());
+    // run_id makes each submission unique so the dashboard never restores stale session data
+    params.set('run_id', runId);
     router.push(`/dashboard?${params.toString()}`);
   }
 
-  const atLimit      = runsLoaded && runsUsed >= DAILY_LIMIT;
+  const atLimit      = runsLoaded && runsUsed >= DAILY_LIMIT && !isAdmin;
   const progressPct  = Math.min(100, runsLoaded ? (runsUsed / DAILY_LIMIT) * 100 : 0);
-  const progressColor = runsUsed >= DAILY_LIMIT ? '#d46060' : runsUsed >= 5 ? '#c8a84a' : '#6dc08a';
+  const progressColor = runsUsed >= DAILY_LIMIT && !isAdmin ? '#d46060' : runsUsed >= 5 ? '#c8a84a' : '#6dc08a';
   const canSubmit    = !!(rivaUrl.trim() || compUrl.trim()) && !atLimit && !submitLoading;
 
   return (
     <main className="text-white" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
-      {showPopup && <SiteTypePopup onClose={() => setShowPopup(false)} />}
+      {showPopup && <SiteTypePopup onClose={() => setShowPopup(false)} onConfirm={doSubmit} />}
+      {showAdminModal && (
+        <AdminModal
+          onClose={() => setShowAdminModal(false)}
+          onUnlocked={(pw) => {
+            setAdminPw(pw);
+            try { localStorage.setItem(ADMIN_STORAGE_KEY, pw); } catch {}
+          }}
+        />
+      )}
 
       {/* ── HERO ─────────────────────────────────────────────────── */}
       <section
@@ -733,24 +962,27 @@ export default function Home() {
                 </g>
                 <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#4db8ff" strokeWidth="2" opacity="0.4" />
               </svg>
-              <p className="mt-3 text-xs font-bold tracking-[4px] uppercase" style={{ color: '#4db8ff', textShadow: '0 0 10px #4db8ff55' }}>YOUR SITE</p>
             </div>
 
-            {/* Competitor eye — red */}
-            <div className="w-36 sm:w-64 text-center">
+            {/* Competitor eye — red (secret admin click zone) */}
+            <div
+              className="w-36 sm:w-64 text-center cursor-pointer select-none"
+              onClick={() => setShowAdminModal(true)}
+              title=""
+            >
               <svg viewBox="0 0 200 120" overflow="visible">
                 <defs><clipPath id="eye-clip-c"><path d="M10,60 Q100,-15 190,60 Q100,135 10,60" /></clipPath></defs>
                 <g clipPath="url(#eye-clip-c)">
                   <path d="M10,60 Q100,-15 190,60 Q100,135 10,60" fill="#fbe9e7" />
                   <g ref={compPupilRef} style={{ transition: 'transform 0.4s cubic-bezier(0.175,0.885,0.32,1.275)' }}>
                     <circle cx="100" cy="60" r="28" fill="#330000" />
-                    <circle id="comp-glow-el" cx="100" cy="60" r="10" fill="#ff3333" style={{ filter: 'drop-shadow(0 0 10px #ff3333)', transition: 'r 0.4s' }} />
+                    <circle id="comp-glow-el" cx="100" cy="60" r="10" fill={isAdmin ? '#ff9900' : '#ff3333'}
+                      style={{ filter: `drop-shadow(0 0 10px ${isAdmin ? '#ff9900' : '#ff3333'})`, transition: 'r 0.4s, fill 0.3s' }} />
                   </g>
                   <rect ref={compLidRef} width="200" height="120" fill="#200a1a" style={{ transform: 'translateY(-100%)', transition: 'transform 0.15s ease-in-out' }} />
                 </g>
-                <path d="M10,60 Q100,-15 190,60" fill="none" stroke="#ff6b6b" strokeWidth="2" opacity="0.4" />
+                <path d="M10,60 Q100,-15 190,60" fill="none" stroke={isAdmin ? '#ff9900' : '#ff6b6b'} strokeWidth="2" opacity="0.4" />
               </svg>
-              <p className="mt-3 text-xs font-bold tracking-[4px] uppercase" style={{ color: '#ff6b6b', textShadow: '0 0 10px #ff6b6b55' }}>COMPETITOR</p>
             </div>
           </div>
 
