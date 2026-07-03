@@ -1,3 +1,6 @@
+# Prototype GTM scraper using Firecrawl and Gemini. Not part of the main pipeline.
+# Scrapes a URL to markdown via Firecrawl then asks Gemini to summarise GTM strategy.
+
 import os
 import asyncio
 from dotenv import load_dotenv
@@ -9,16 +12,13 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.markdown import Markdown
 
-# --- Configuration ---
 load_dotenv()
 FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# --- Initialize Rich Console ---
 console = Console()
 
 def check_api_keys():
-    """Checks if the required API keys are present in the .env file."""
     if not FIRECRAWL_API_KEY or not GEMINI_API_KEY:
         console.print(
             Panel(
@@ -31,13 +31,11 @@ def check_api_keys():
     return True
 
 async def scrape_website(url: str):
-    """Uses Firecrawl to scrape the website and returns the markdown content."""
     with Live(Spinner("dots", text="[cyan]Scraping website with FireCrawl..."), refresh_per_second=10, transient=True):
         try:
             app = FirecrawlApp(api_key=FIRECRAWL_API_KEY)
             loop = asyncio.get_event_loop()
             
-            # v2 SDK: returns a Document object
             scraped_data = await loop.run_in_executor(None, lambda: app.scrape(url))
             
             markdown_content = None
@@ -57,7 +55,6 @@ async def scrape_website(url: str):
             return None
 
 async def analyze_with_gemini(content: str):
-    """Uses Gemini to analyze content and generate a GTM summary."""
     with Live(Spinner("dots", text="[magenta]Analyzing content with Gemini..."), refresh_per_second=10, transient=True):
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
@@ -76,7 +73,6 @@ async def analyze_with_gemini(content: str):
             ---
             """
             
-            # Using gemini-2.5-flash as confirmed available
             response = client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=prompt.format(website_content=content)

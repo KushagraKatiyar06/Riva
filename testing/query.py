@@ -1,7 +1,5 @@
-"""
-testing/query.py
-Query the Vectorize index for competitive intelligence using RAG.
-"""
+# Testing tool to query the Vectorize index directly. Embeds a question,
+# searches for relevant chunks, and uses Gemini to produce an answer.
 
 import os
 import requests

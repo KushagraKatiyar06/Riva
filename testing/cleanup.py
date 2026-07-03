@@ -1,10 +1,5 @@
-"""
-testing/cleanup.py
-Clean up local extracts and/or Cloudflare Vectorize vectors.
-
-Usage:
-    python testing/cleanup.py
-"""
+# CLI tool to delete local extract files and/or Cloudflare Vectorize vectors,
+# either for all domains at once or per domain. Run: python testing/cleanup.py
 
 import os
 import json
@@ -29,9 +24,6 @@ HEADERS      = {"Authorization": f"Bearer {API_TOKEN}", "Content-Type": "applica
 EXTRACTS_DIR = Path(__file__).parent / "extracts"
 
 
-# ---------------------------------------------------------------------------
-# Helpers — same ID logic as vectorize.py so IDs are consistent
-# ---------------------------------------------------------------------------
 def chunk_text(text: str) -> list[str]:
     chunks, start = [], 0
     while start < len(text):
@@ -45,7 +37,7 @@ def vector_id(domain: str, intel_type: str, url: str, idx: int) -> str:
 
 
 def ids_for_file(filepath: Path) -> list[str]:
-    """Recompute all vector IDs that were generated from a given extract file."""
+    # recomputes IDs using the same hash logic as vectorize.py so deletes match what was inserted
     try:
         raw   = filepath.read_text(encoding="utf-8")
         lines = raw.splitlines()
@@ -72,11 +64,7 @@ def ids_for_file(filepath: Path) -> list[str]:
         return []
 
 
-# ---------------------------------------------------------------------------
-# Cloudflare Vectorize API
-# ---------------------------------------------------------------------------
 def cf_delete_ids(ids: list[str]) -> int:
-    """Delete vectors by ID in batches. Returns total deleted."""
     total = 0
     for i in range(0, len(ids), DELETE_BATCH):
         batch = ids[i : i + DELETE_BATCH]
@@ -102,13 +90,12 @@ def cf_create_index() -> bool:
     resp = requests.post(url, headers=HEADERS, json=body, timeout=20)
     if not resp.json().get("success", False):
         return False
-    # Enable metadata indexing for 'domain' so server-side filtering works
     cf_enable_domain_metadata_index()
     return True
 
 
 def cf_enable_domain_metadata_index() -> bool:
-    """Enable metadata indexing for the 'domain' field (required for server-side filtering)."""
+    # needed so Vectorize can filter by domain on the server side instead of post-filtering in Python
     url  = (
         f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}"
         f"/vectorize/v2/indexes/{INDEX_NAME}/metadata-index/create"
@@ -124,9 +111,6 @@ def cf_index_exists() -> bool:
     return resp.status_code == 200
 
 
-# ---------------------------------------------------------------------------
-# Actions
-# ---------------------------------------------------------------------------
 def list_domains() -> list[str]:
     if not EXTRACTS_DIR.exists():
         return []
@@ -181,9 +165,6 @@ def clean_vectors_domain(domain: str):
     print(f"✅ {deleted} deleted.")
 
 
-# ---------------------------------------------------------------------------
-# Menu
-# ---------------------------------------------------------------------------
 def confirm(prompt: str) -> bool:
     return input(f"{prompt} [y/N]: ").strip().lower() == "y"
 

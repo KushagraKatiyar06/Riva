@@ -1,8 +1,5 @@
-"""
-testing/vectorize.py
-Reads all extracts from testing/extracts/, chunks them, embeds via Cloudflare Workers AI,
-and upserts to the Vectorize index 'riva-intel'.
-"""
+# Standalone script to (re)vectorize all extract files. Useful if you want to
+# rebuild the index without going through the UI. Reads from testing/extracts/.
 
 import os
 import json

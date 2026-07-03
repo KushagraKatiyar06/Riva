@@ -1,3 +1,7 @@
+// Cloudflare Worker that handles RAG queries. Embeds the question using the
+// AI binding, searches Vectorize, and calls Gemini to generate an answer.
+// Currently unused - the backend calls Cloudflare directly instead.
+
 export interface Env {
   AI: Ai;
   VECTORIZE: VectorizeIndex;
@@ -40,13 +44,11 @@ export default {
           });
         }
 
-        // Embed query — uses Workers AI binding (no API key needed)
         const embedResult = await env.AI.run('@cf/baai/bge-base-en-v1.5', {
           text: [query],
         }) as { data: number[][] };
         const vector = embedResult.data[0];
 
-        // Search Vectorize — uses native binding
         const queryResult = await env.VECTORIZE.query(vector, {
           topK: 20,
           returnMetadata: 'all',
@@ -54,7 +56,6 @@ export default {
 
         let matches = queryResult.matches;
 
-        // Filter by domain if provided (session isolation)
         if (domains?.length) {
           const domainSet = new Set(domains);
           matches = matches.filter(m => domainSet.has((m.metadata as Record<string, string>)?.domain));
@@ -68,7 +69,6 @@ export default {
           );
         }
 
-        // Group chunks by domain for structured context
         const grouped: Record<string, string[]> = {};
         for (const m of matches) {
           const meta = m.metadata as Record<string, string>;
@@ -87,9 +87,8 @@ export default {
           'Be specific. Where multiple domains are present, highlight differences clearly.\n\n' +
           `---\n${context}\n---\n\nQuestion: ${query}\nAnswer:`;
 
-        // Generate answer with Gemini
         const geminiRes = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${env.GEMINI_API_KEY}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

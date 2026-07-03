@@ -1,11 +1,7 @@
-"""
-testing/report.py
-Generates a competitive intelligence one-pager HTML report from Vectorize data.
-Logos are scraped from each site's homepage and embedded as base64.
-
-Usage:
-    python testing/report.py
-"""
+# Generates the competitive intelligence HTML/PDF report. Scrapes logos and
+# brand colors from each domain, queries the Vectorize index for intel, calls
+# Gemini to structure the data, then renders a self-contained HTML file.
+# Run directly: python testing/report.py
 
 import io
 import os
@@ -14,6 +10,7 @@ import json
 import time
 import base64
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin
@@ -39,6 +36,17 @@ BROWSER_HEADERS = {
 }
 
 
+def _parse_gemini_json(text: str) -> str:
+    text = text.strip()
+    if "```" in text:
+        text = text.split("```")[1].lstrip("json").strip()
+        text = text.split("```")[0].strip()
+    start, end = text.find('{'), text.rfind('}')
+    if start != -1 and end != -1:
+        text = text[start:end + 1]
+    return text
+
+
 def embed(text: str) -> list:
     url = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{EMBED_MODEL}"
     for attempt in range(4):
@@ -53,36 +61,50 @@ def embed(text: str) -> list:
     raise RuntimeError("embed() failed after 4 retries — rate limit persists.")
 
 
-def vectorize_query(question: str, top_k: int = 20, domain: str = None) -> list:
+def embed_batch(texts: list[str]) -> list[list[float]]:
+    url = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{EMBED_MODEL}"
+    for attempt in range(4):
+        resp = requests.post(url, headers=CF_HEADERS, json={"text": texts}, timeout=30)
+        if resp.status_code == 429:
+            wait = 30 * (attempt + 1)
+            print(f"  Workers AI rate limit — waiting {wait}s (attempt {attempt+1}/4)...")
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        return resp.json()["result"]["data"]
+    raise RuntimeError("embed_batch() failed after 4 retries — rate limit persists.")
+
+
+def vectorize_query_vec(vector: list[float], top_k: int = 20, domain: str = None) -> list:
     url     = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/vectorize/v2/indexes/{INDEX_NAME}/query"
-    vector  = embed(question)
     payload = {"vector": vector, "topK": top_k, "returnMetadata": "all"}
     if domain:
         payload["filter"] = {"domain": {"$eq": domain}}
     try:
         resp = requests.post(url, headers=CF_HEADERS, json=payload, timeout=20)
         resp.raise_for_status()
-        result = resp.json().get("result") or {}
+        result  = resp.json().get("result") or {}
         matches = result.get("matches", [])
-        # If server-side filter returned nothing, fall back to client-side filtering
-        # (happens when the index doesn't have metadata indexing enabled for 'domain')
         if domain and not matches:
-            fallback_payload = {"vector": vector, "topK": 20, "returnMetadata": "all"}
-            resp2   = requests.post(url, headers=CF_HEADERS, json=fallback_payload, timeout=20)
+            payload2 = {"vector": vector, "topK": 20, "returnMetadata": "all"}
+            resp2    = requests.post(url, headers=CF_HEADERS, json=payload2, timeout=20)
             resp2.raise_for_status()
             all_matches = (resp2.json().get("result") or {}).get("matches", [])
             matches = [m for m in all_matches if m.get("metadata", {}).get("domain") == domain]
     except requests.HTTPError:
-        # Filter may have failed (e.g. metadata not indexed) — retry without filter
         if domain:
-            fallback_payload = {"vector": vector, "topK": 20, "returnMetadata": "all"}
-            resp2   = requests.post(url, headers=CF_HEADERS, json=fallback_payload, timeout=20)
+            payload2 = {"vector": vector, "topK": 20, "returnMetadata": "all"}
+            resp2    = requests.post(url, headers=CF_HEADERS, json=payload2, timeout=20)
             resp2.raise_for_status()
             all_matches = (resp2.json().get("result") or {}).get("matches", [])
             matches = [m for m in all_matches if m.get("metadata", {}).get("domain") == domain]
         else:
             raise
     return matches
+
+
+def vectorize_query(question: str, top_k: int = 20, domain: str = None) -> list:
+    return vectorize_query_vec(embed(question), top_k=top_k, domain=domain)
 
 
 def chunks_for(domain: str, topic: str, top_k: int = 12) -> str:
@@ -125,14 +147,9 @@ def scrape_brand_assets(domain: str) -> dict:
 
 
 def _find_logo_url(soup: BeautifulSoup, base_url: str) -> str:
-    """
-    Try to find the actual brand logo in priority order:
-    1. <img> tag with 'logo' in id/class/alt/src (in header/nav)
-    2. SVG <img> anywhere in header/nav
-    3. apple-touch-icon (high quality, always the brand icon)
-    4. Largest favicon
-    """
-    # 1. Look in header/nav for an img with 'logo' signals
+    # priority order: header/nav img with logo signals, then SVG in header,
+    # then apple-touch-icon, then any favicon
+    # 1. header/nav img with logo in id/class/alt/src
     for container in ["header", "nav", '[role="banner"]']:
         section = soup.find(container)
         if not section:
@@ -148,12 +165,11 @@ def _find_logo_url(soup: BeautifulSoup, base_url: str) -> str:
                 src = img.get("src") or img.get("data-src")
                 if src:
                     return urljoin(base_url, src)
-            # SVG in header is almost always the logo
             src = img.get("src", "")
             if src.endswith(".svg"):
                 return urljoin(base_url, src)
 
-    # 2. Any img with logo in attributes site-wide
+    # 2. any img with logo in attributes site-wide
     for img in soup.find_all("img"):
         attrs = " ".join([
             img.get("id", ""),
@@ -166,13 +182,13 @@ def _find_logo_url(soup: BeautifulSoup, base_url: str) -> str:
             if src:
                 return urljoin(base_url, src)
 
-    # 3. apple-touch-icon (reliable brand icon, usually 180x180)
+    # 3. apple-touch-icon (usually 180x180, reliable brand image)
     for rel in ["apple-touch-icon", "apple-touch-icon-precomposed"]:
         tag = soup.find("link", rel=lambda r: r and rel in r)
         if tag and tag.get("href"):
             return urljoin(base_url, tag["href"])
 
-    # 4. Largest favicon
+    # 4. fallback to any favicon
     for tag in soup.find_all("link", rel=lambda r: r and "icon" in r):
         if tag.get("href"):
             return urljoin(base_url, tag["href"])
@@ -196,8 +212,8 @@ def _fetch_image_b64(url: str, save_dir: Path, name: str) -> str:
 
 
 def _extract_brand_color(soup: BeautifulSoup, logo_b64: str = None) -> str | None:
-    """Extract primary brand color: theme-color meta → CSS vars → logo dominant color."""
-    # 1. theme-color / msapplication-TileColor meta tag
+    # try in order: theme-color meta, CSS custom properties, then dominant logo color via Pillow
+    # 1. theme-color meta tag
     for name in ("theme-color", "msapplication-TileColor"):
         tag = soup.find("meta", attrs={"name": name})
         if tag and tag.get("content"):
@@ -205,7 +221,7 @@ def _extract_brand_color(soup: BeautifulSoup, logo_b64: str = None) -> str | Non
             if re.match(r"^#[0-9a-fA-F]{3,6}$", c):
                 return c
 
-    # 2. CSS custom properties (inline <style> tags)
+    # 2. CSS custom properties in inline style tags
     for style_tag in soup.find_all("style"):
         css = style_tag.string or ""
         for var in ("--primary-color", "--brand-color", "--accent-color",
@@ -214,7 +230,7 @@ def _extract_brand_color(soup: BeautifulSoup, logo_b64: str = None) -> str | Non
             if m:
                 return m.group(1)
 
-    # 3. Dominant saturated color from logo via Pillow
+    # 3. dominant saturated pixel from logo (quantize to 8 colors, pick most saturated)
     if logo_b64 and "base64," in logo_b64:
         try:
             from PIL import Image
@@ -237,45 +253,93 @@ def _extract_brand_color(soup: BeautifulSoup, logo_b64: str = None) -> str | Non
     return None
 
 
+_SCORE_THRESHOLD = 0.45  # discard low-relevance chunks
+
+
+def _chunks_from_matches(matches: list, threshold: float = _SCORE_THRESHOLD) -> str:
+    good = [m for m in matches if m.get("score", 1.0) >= threshold]
+    if not good:
+        good = matches[:5]  # below threshold but still the best we have
+    return "\n\n".join(m["metadata"].get("text", "") for m in good)
+
+
+def _build_topic_queries(focus: str | None) -> dict[str, str]:
+    queries: dict[str, str] = {
+        "pricing":     "pricing tiers plans price per month annual cost enterprise starter pro",
+        "features":    "core features product capabilities what you can do key functionality",
+        "positioning": "company mission who it is for target customers use case value proposition",
+        "integrations":"integrations API SDK third party connections supported platforms",
+    }
+    if focus:
+        queries["focus_main"]     = focus
+        queries["focus_pricing"]  = f"{focus} pricing cost plans tiers"
+        queries["focus_features"] = f"{focus} features capabilities how it works"
+    return queries
+
+
 def generate_intel(domains: list, focus: str = None) -> dict:
     client   = genai.Client(api_key=GEMINI_KEY)
-    sections = {}
+    sections = {d: {} for d in domains}
 
-    for d in domains:
-        sections[d] = {}
-        # Small delay between each embed call to stay under Workers AI rate limit
-        sections[d]["pricing"]     = chunks_for(d, "pricing tiers cost plans price per month");     time.sleep(1)
-        sections[d]["features"]    = chunks_for(d, "features capabilities product functionality");   time.sleep(1)
-        sections[d]["positioning"] = chunks_for(d, "about company product description target audience"); time.sleep(1)
-        if focus:
-            sections[d]["focus"] = chunks_for(d, focus)
-            time.sleep(1)
+    topic_queries = _build_topic_queries(focus)
+    topic_keys    = list(topic_queries.keys())
+
+    # single embed call for all topics so we don't hit the rate limit with sequential calls
+    all_vectors = embed_batch(list(topic_queries.values()))
+    topic_vectors = dict(zip(topic_keys, all_vectors))
+
+    def _fetch(domain, topic_key):
+        vec     = topic_vectors[topic_key]
+        matches = vectorize_query_vec(vec, top_k=20, domain=domain)
+        return domain, topic_key, _chunks_from_matches(matches)
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = [
+            ex.submit(_fetch, d, k)
+            for d in domains
+            for k in topic_keys
+        ]
+        for fut in as_completed(futures):
+            d, k, text = fut.result()
+            sections[d][k] = text
 
     context_block = ""
     for d, s in sections.items():
-        focus_block = f"\n\nFOCUS ({focus}):\n{s['focus']}" if focus and s.get("focus") else ""
+        focus_chunks = ""
+        if focus:
+            focus_chunks = "\n\n".join(filter(None, [
+                s.get("focus_main", ""),
+                s.get("focus_pricing", ""),
+                s.get("focus_features", ""),
+            ]))
         context_block += (
             f"\n\n=== {d} ===\n"
-            f"PRICING:\n{s['pricing']}\n\n"
-            f"FEATURES:\n{s['features']}\n\n"
-            f"POSITIONING:\n{s['positioning']}"
-            f"{focus_block}"
+            f"PRICING:\n{s.get('pricing', '')}\n\n"
+            f"FEATURES:\n{s.get('features', '')}\n\n"
+            f"POSITIONING:\n{s.get('positioning', '')}\n\n"
+            f"INTEGRATIONS:\n{s.get('integrations', '')}"
+            + (f"\n\nFOCUS — {focus}:\n{focus_chunks}" if focus_chunks else "")
         )
 
-    # Build the schema string outside the f-string to avoid backslash issues
     domain_schemas = []
     for d in domains:
+        focus_insight_field = (
+            f'      "focus_insight": "2-3 sentences specifically about {focus} for this product",\n'
+            if focus else ""
+        )
         domain_schemas.append(
             '    "' + d + '": {\n'
             '      "display_name": "Short brand name",\n'
-            '      "tagline": "One sentence description",\n'
-            '      "target_audience": "Who they serve",\n'
+            '      "tagline": "One sentence value proposition",\n'
+            '      "target_audience": "Who they primarily serve",\n'
             '      "pricing_tiers": [\n'
-            '        {"name": "tier", "price": "price or Free", "highlights": ["f1","f2","f3"]}\n'
+            '        {"name": "tier name", "price": "$/mo or Free", "highlights": ["key feature 1","key feature 2","key feature 3"]}\n'
             '      ],\n'
-            '      "top_features": ["f1","f2","f3","f4","f5"],\n'
+            '      "top_features": ["f1","f2","f3","f4","f5","f6"],\n'
+            '      "integrations": ["integration1","integration2","integration3"],\n'
             '      "strengths": ["s1","s2","s3"],\n'
             '      "weaknesses": ["w1","w2"]\n'
+            + focus_insight_field +
             '    }'
         )
     domains_schema = ",\n".join(domain_schemas)
@@ -283,49 +347,46 @@ def generate_intel(domains: list, focus: str = None) -> dict:
     only_fields = []
     for d in domains:
         key = "only_in_" + d.replace(".", "_")
-        only_fields.append(f'    "{key}": ["feature1","feature2","feature3"]')
+        only_fields.append(f'    "{key}": ["unique differentiator 1","unique differentiator 2","unique differentiator 3"]')
     only_schema = ",\n".join(only_fields)
 
+    focus_verdict_field = (
+        f'    "focus_verdict": "Two sentences on how each product addresses {focus}",\n'
+        if focus else ""
+    )
     schema = (
         '{\n'
-        '  "domains": {\n' +
-        domains_schema + '\n'
-        '  },\n'
+        '  "domains": {\n' + domains_schema + '\n  },\n'
         '  "comparison": {\n' +
-        only_schema + ',\n'
-        '    "pricing_verdict": "One sentence on pricing differences",\n'
+        only_schema + ',\n' +
+        focus_verdict_field +
+        '    "pricing_verdict": "One sentence comparing pricing structures",\n'
         '    "positioning_verdict": "One sentence on market positioning differences",\n'
-        '    "recommendation": "Two sentence GTM recommendation"\n'
+        '    "recommendation": "Two to three sentence GTM recommendation"\n'
         '  }\n'
         '}'
     )
 
     focus_instruction = (
-        f"\n\nFOCUS: The user specifically wants emphasis on **{focus}**. "
-        f"Prioritize {focus}-related details in pricing_tiers, top_features, strengths, "
-        f"and the recommendation fields."
+        f"\n\nCRITICAL — The user's focus is: \"{focus}\"\n"
+        f"Every field must be interpreted through this lens. "
+        f"In pricing_tiers, highlight features relevant to {focus}. "
+        f"In top_features, lead with {focus}-related capabilities. "
+        f"In focus_insight, give a direct, specific answer about how this product handles {focus}. "
+        f"The recommendation must give concrete GTM advice specifically about {focus}."
     ) if focus else ""
 
     prompt = (
-        "You are a competitive intelligence analyst. Based solely on the context below, "
-        "produce a structured JSON report.\n\n"
+        "You are a senior competitive intelligence analyst. "
+        "Use ONLY the context below — do not invent facts not present in it.\n\n"
         "CONTEXT:\n" + context_block + "\n\n"
+        + focus_instruction + "\n\n"
         "Return ONLY valid JSON (no markdown fences) matching this exact schema:\n" + schema
-        + focus_instruction
     )
 
     for attempt in range(3):
         res  = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-        text = res.text.strip()
-        # Strip markdown fences if present
-        if "```" in text:
-            text = text.split("```")[1].lstrip("json").strip()
-            text = text.split("```")[0].strip()
-        # Extract outermost JSON object robustly
-        start = text.find('{')
-        end   = text.rfind('}')
-        if start != -1 and end != -1:
-            text = text[start:end + 1]
+        text = _parse_gemini_json(res.text)
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
@@ -336,13 +397,12 @@ def generate_intel(domains: list, focus: str = None) -> dict:
     raise RuntimeError("generate_intel failed after 3 attempts")
 
 
-def render_html(intel: dict, images: dict) -> str:
+def render_html(intel: dict, images: dict, focus: str = None) -> str:
     domains    = list(intel["domains"].keys())
     comparison = intel["comparison"]
     date_str   = datetime.now().strftime("%B %d, %Y")
     is_dual    = len(domains) == 2
 
-    # Per-domain brand colors (fallback to defaults)
     _fallbacks = ["#00aaaa", "#f3810f"]
     domain_colors = {}
     for i, d in enumerate(domains):
@@ -385,13 +445,32 @@ def render_html(intel: dict, images: dict) -> str:
                 f'</div>'
             )
 
-        features  = info.get("top_features", [])[:6]
-        strengths = info.get("strengths", [])[:3]
-        weakness  = info.get("weaknesses", [])[:3]
+        features     = info.get("top_features", [])[:6]
+        integrations = info.get("integrations", [])[:5]
+        strengths    = info.get("strengths", [])[:3]
+        weakness     = info.get("weaknesses", [])[:3]
+        focus_insight = str(info.get("focus_insight", "")).strip()
 
-        features_html  = "".join(f"<li>{str(f)[:100]}</li>" for f in features)
-        strengths_html = "".join(f"<li>{str(s)[:100]}</li>" for s in strengths)
-        weakness_html  = "".join(f"<li>{str(w)[:100]}</li>" for w in weakness)
+        features_html     = "".join(f"<li>{str(f)[:100]}</li>" for f in features)
+        integrations_html = "".join(f"<span class='integ-tag'>{str(i)[:40]}</span>" for i in integrations)
+        strengths_html    = "".join(f"<li>{str(s)[:100]}</li>" for s in strengths)
+        weakness_html     = "".join(f"<li>{str(w)[:100]}</li>" for w in weakness)
+
+        focus_block_html = ""
+        if focus and focus_insight:
+            focus_block_html = (
+                f'<div class="focus-insight" style="border-left:3px solid {color};background:{color}0d;">'
+                f'<div class="section-label" style="color:{color};">RE: {focus[:60]}</div>'
+                f'<p class="focus-text">{focus_insight[:400]}</p>'
+                f'</div>'
+            )
+
+        integrations_section = ""
+        if integrations_html:
+            integrations_section = (
+                f'<div class="section-label">Integrations</div>'
+                f'<div class="integ-row">{integrations_html}</div>'
+            )
 
         return (
             f'<div class="domain-col">'
@@ -404,11 +483,13 @@ def render_html(intel: dict, images: dict) -> str:
             f'<p class="tagline">{str(info["tagline"])[:120]}</p>'
             f'<span class="audience-badge" style="background:{color}18;color:{color};">{str(info["target_audience"])[:80]}</span>'
             f'</div></div>'
-            + hero_html +
+            + hero_html
+            + focus_block_html +
             f'<div class="section-label">Pricing</div>'
             f'<div class="tiers-row">{tiers_html}</div>'
             f'<div class="section-label">Top Features</div>'
             f'<ul class="feature-list clamp-list">{features_html}</ul>'
+            + integrations_section +
             f'<div class="two-col">'
             f'<div><div class="section-label green">Strengths</div>'
             f'<ul class="feature-list">{strengths_html}</ul></div>'
@@ -509,6 +590,21 @@ def render_html(intel: dict, images: dict) -> str:
   .feature-list {{ padding-left: 12px; }}
   .feature-list li {{ margin-bottom: 3px; font-size: 11.5px; color: #333; line-height: 1.45; }}
   .two-col {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }}
+  .focus-insight {{ border-radius: 8px; padding: 10px 12px; margin: 10px 0; }}
+  .focus-text {{ font-size: 11.5px; color: #2a2f3e; line-height: 1.6; margin-top: 4px; }}
+  .integ-row {{ display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 4px; }}
+  .integ-tag {{
+    background: #f0f4ff; color: #3355cc; border-radius: 12px;
+    padding: 2px 8px; font-size: 10px; font-weight: 600; border: 1px solid #d0d8f0;
+  }}
+  .focus-banner {{
+    background: linear-gradient(90deg, {c1}18, {c2}18);
+    border: 1px solid {c1}44; border-radius: 10px;
+    padding: 10px 16px; margin-bottom: 18px;
+    display: flex; align-items: center; gap: 10px;
+  }}
+  .focus-banner-label {{ font-size: 9px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: {c1}; white-space: nowrap; }}
+  .focus-banner-text  {{ font-size: 12px; color: #1a1f2e; font-weight: 500; }}
   .comparison-section {{
     background: white; border-radius: 12px; padding: 18px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 18px;
@@ -554,12 +650,14 @@ def render_html(intel: dict, images: dict) -> str:
       <div class="report-title">RIVA <span>INTELLIGENCE</span></div>
       <div style="font-size:11px;color:#666;margin-top:2px;">Competitive Analysis &mdash; {title_str}</div>
     </div>
-    <div class="report-meta">Generated by Riva<br>{date_str}</div>
+    <div class="report-meta">Generated by Riva<br>{date_str}{"<br><span style='color:" + c1 + ";font-weight:700;'>Focus: " + focus + "</span>" if focus else ""}</div>
   </div>
+  {"<div class='focus-banner'><span class='focus-banner-label'>Analysis Focus</span><span class='focus-banner-text'>" + focus + "</span></div>" if focus else ""}
   <div class="domain-grid">{cards_html}</div>
   <div class="comparison-section">
     <div class="comp-header">Competitive Differentiators</div>
     <div class="unique-grid">{unique_sections}</div>
+    {"<div class='verdict-box' style='border-left-color:" + c1 + ";margin-bottom:12px;'><div class='verdict-label' style='color:" + c1 + ";'>Focus Verdict — " + focus + "</div><div class='verdict-text'>" + comparison.get("focus_verdict", "") + "</div></div>" if focus and comparison.get("focus_verdict") else ""}
     <div class="verdict-row">
       <div class="verdict-box" style="border-left-color:{c1};">
         <div class="verdict-label">Pricing Verdict</div>
@@ -572,7 +670,7 @@ def render_html(intel: dict, images: dict) -> str:
     </div>
   </div>
   <div class="recommendation">
-    <div class="rec-label">GTM Recommendation</div>
+    <div class="rec-label">{"GTM Recommendation — " + focus if focus else "GTM Recommendation"}</div>
     <div class="rec-text">{comparison.get("recommendation", "&mdash;")}</div>
   </div>
   <div class="report-footer">RIVA COMPETITIVE INTELLIGENCE &middot; {date_str} &middot; CONFIDENTIAL</div>
@@ -638,7 +736,7 @@ def main():
     print("done")
 
     print("  Rendering HTML...", end=" ", flush=True)
-    html = render_html(intel, images)
+    html = render_html(intel, images, focus=None)
     print("done")
 
     slug     = "_vs_".join(intel["domains"][d]["display_name"].lower().replace(" ", "-") for d in selected)

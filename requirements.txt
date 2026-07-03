@@ -6,5 +6,4 @@ python-dotenv
 google-genai
 requests
 beautifulsoup4
-python-pptx
 Pillow

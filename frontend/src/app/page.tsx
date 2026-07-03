@@ -1,3 +1,5 @@
+// Landing page with the URL input form, daily run limit tracking, history
+// tab, and admin/clear modals.
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -7,7 +9,6 @@ import { Download, Trash2, RefreshCw, X } from 'lucide-react';
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
 const DAILY_LIMIT = 2;
 
-/** Retrieve or create a persistent browser UUID for per-user rate limiting. */
 function getClientId(): string {
   if (typeof window === 'undefined') return '';
   const key = 'riva-client-id';
@@ -24,7 +25,7 @@ function clientHeaders() {
 }
 
 type RunEntry   = { id: string; riva_url: string; comp_url: string; started_at: string };
-type ReportFile = { filename: string; size: number; modified: string; url: string; type: 'pdf' | 'pptx' };
+type ReportFile = { filename: string; size: number; modified: string; url: string; type: 'pdf' };
 
 function formatDate(iso: string) {
   try {
@@ -55,7 +56,6 @@ async function downloadBlob(href: string, filename: string) {
   URL.revokeObjectURL(a.href);
 }
 
-// ── Website-type popup ───────────────────────────────────────────────────────
 function SiteTypePopup({ onClose, onConfirm }: { onClose: () => void; onConfirm?: () => void }) {
   return (
     <div
@@ -84,7 +84,6 @@ function SiteTypePopup({ onClose, onConfirm }: { onClose: () => void; onConfirm?
           Before you start
         </p>
 
-        {/* Requirement callout */}
         <div className="rounded-xl px-4 py-3 mb-5" style={{ background: 'rgba(160,100,255,0.07)', border: '1px solid rgba(160,100,255,0.25)' }}>
           <p className="text-xs font-bold mb-1" style={{ color: '#c8aaff' }}>Both sites must be:</p>
           <ul className="text-xs space-y-1" style={{ color: 'rgba(200,170,255,0.7)' }}>
@@ -95,7 +94,6 @@ function SiteTypePopup({ onClose, onConfirm }: { onClose: () => void; onConfirm?
         </div>
 
         <div className="flex gap-3 mb-5">
-          {/* Good example */}
           <div className="flex-1 rounded-xl p-4" style={{ background: 'rgba(109,192,138,0.08)', border: '1px solid rgba(109,192,138,0.25)' }}>
             <p className="text-[10px] font-bold tracking-[3px] uppercase mb-2" style={{ color: '#6dc08a' }}>Works great</p>
             <p className="text-xs font-bold mb-1" style={{ color: '#c8aaff' }}>vercel.com vs railway.app</p>
@@ -107,7 +105,6 @@ function SiteTypePopup({ onClose, onConfirm }: { onClose: () => void; onConfirm?
             </ul>
           </div>
 
-          {/* Bad example */}
           <div className="flex-1 rounded-xl p-4" style={{ background: 'rgba(212,96,96,0.08)', border: '1px solid rgba(212,96,96,0.25)' }}>
             <p className="text-[10px] font-bold tracking-[3px] uppercase mb-2" style={{ color: '#d46060' }}>Doesn&apos;t work</p>
             <ul className="text-xs space-y-1" style={{ color: 'rgba(200,170,255,0.6)' }}>
@@ -135,7 +132,6 @@ function SiteTypePopup({ onClose, onConfirm }: { onClose: () => void; onConfirm?
   );
 }
 
-// ── Clear modal ──────────────────────────────────────────────────────────────
 type ClearPreview = {
   domains:       { domain: string; files: number; vectors: number }[];
   total_vectors: number;
@@ -200,7 +196,6 @@ function ClearModal({ onClose, onCleared }: { onClose: () => void; onCleared: ()
         }}
         onClick={e => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex items-center justify-between px-6 pt-6 pb-4 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
           <div className="flex items-center gap-3">
             <Trash2 size={14} style={{ color: '#d46060' }} />
@@ -213,7 +208,6 @@ function ClearModal({ onClose, onCleared }: { onClose: () => void; onCleared: ()
           </button>
         </div>
 
-        {/* Body — scrollable */}
         <div className="flex-1 overflow-y-auto px-6 py-5 min-h-0">
           {loading && (
             <p className="text-xs text-center py-8" style={{ color: 'rgba(200,170,255,0.4)' }}>
@@ -233,7 +227,6 @@ function ClearModal({ onClose, onCleared }: { onClose: () => void; onCleared: ()
                 The following will be permanently deleted:
               </p>
 
-              {/* Domains / vectors */}
               {preview.domains.length > 0 ? (
                 <div className="mb-4 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(160,100,255,0.15)' }}>
                   <div className="px-4 py-2 flex items-center justify-between" style={{ background: 'rgba(0,0,0,0.3)', borderBottom: '1px solid rgba(160,100,255,0.1)' }}>
@@ -261,7 +254,6 @@ function ClearModal({ onClose, onCleared }: { onClose: () => void; onCleared: ()
                 <p className="text-xs mb-4" style={{ color: 'rgba(200,170,255,0.3)' }}>No indexed domains.</p>
               )}
 
-              {/* Report files */}
               {preview.report_files.length > 0 ? (
                 <div className="mb-4 rounded-xl overflow-hidden" style={{ border: '1px solid rgba(160,100,255,0.15)' }}>
                   <div className="px-4 py-2" style={{ background: 'rgba(0,0,0,0.3)', borderBottom: '1px solid rgba(160,100,255,0.1)' }}>
@@ -284,7 +276,6 @@ function ClearModal({ onClose, onCleared }: { onClose: () => void; onCleared: ()
                 <p className="text-xs mb-4" style={{ color: 'rgba(200,170,255,0.3)' }}>No generated files.</p>
               )}
 
-              {/* Session counts */}
               <div className="flex gap-3 mb-5">
                 <div className="flex-1 rounded-xl px-4 py-3 text-center" style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(160,100,255,0.12)' }}>
                   <p className="text-lg font-bold" style={{ color: '#c8aaff' }}>{preview.run_count}</p>
@@ -299,7 +290,6 @@ function ClearModal({ onClose, onCleared }: { onClose: () => void; onCleared: ()
           )}
         </div>
 
-        {/* Password + confirm footer */}
         {!loading && !done && (
           <div className="px-6 pb-6 pt-4 shrink-0" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
             {error && (
@@ -357,9 +347,6 @@ function ClearModal({ onClose, onCleared }: { onClose: () => void; onCleared: ()
   );
 }
 
-// ── History tab ──────────────────────────────────────────────────────────────
-
-/** Try to match reports to a run by checking if the report filename contains the domain slugs. */
 function matchReports(run: RunEntry, reports: ReportFile[]): ReportFile[] {
   const slugs = [run.riva_url, run.comp_url]
     .filter(Boolean)
@@ -381,9 +368,9 @@ function ReportBadge({ r }: { r: ReportFile }) {
           <span
             className="text-[9px] font-bold tracking-[2px] uppercase px-1.5 py-0.5 rounded shrink-0"
             style={{
-              background: r.type === 'pptx' ? 'rgba(212,135,74,0.15)' : 'rgba(109,192,138,0.12)',
-              color:      r.type === 'pptx' ? '#d4874a'               : '#6dc08a',
-              border:     `1px solid ${r.type === 'pptx' ? 'rgba(212,135,74,0.3)' : 'rgba(109,192,138,0.25)'}`,
+              background: 'rgba(109,192,138,0.12)',
+              color:      '#6dc08a',
+              border:     '1px solid rgba(109,192,138,0.25)',
             }}
           >
             {r.type}
@@ -448,7 +435,6 @@ function HistoryTab({
     });
   }
 
-  // Reports that aren't matched to any run
   const matchedReportNames = new Set(
     runs.flatMap(run => matchReports(run, reports).map(r => r.filename))
   );
@@ -463,7 +449,6 @@ function HistoryTab({
         />
       )}
 
-      {/* Header row */}
       <div className="flex items-center justify-between mb-4">
         <p className="text-xs font-bold tracking-[3px] uppercase" style={{ color: 'rgba(200,170,255,0.4)' }}>
           Session history
@@ -488,7 +473,6 @@ function HistoryTab({
         </div>
       </div>
 
-      {/* CF vector count stat */}
       <div className="flex items-center gap-2 mb-5 px-3 py-2 rounded-lg"
         style={{ background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(160,100,255,0.1)' }}>
         <span className="text-[10px] tracking-[1px] uppercase" style={{ color: 'rgba(200,170,255,0.35)' }}>
@@ -504,7 +488,6 @@ function HistoryTab({
         )}
       </div>
 
-      {/* Standalone reports section — always visible */}
       <div className="mb-8">
         <p className="text-xs font-bold tracking-[3px] uppercase mb-3" style={{ color: 'rgba(200,170,255,0.4)' }}>
           Generated reports
@@ -527,7 +510,6 @@ function HistoryTab({
         )}
       </div>
 
-      {/* Runs list */}
       <p className="text-xs font-bold tracking-[3px] uppercase mb-3" style={{ color: 'rgba(200,170,255,0.4)' }}>
         Analysis runs
       </p>
@@ -550,7 +532,6 @@ function HistoryTab({
                 className="rounded-xl overflow-hidden"
                 style={{ border: '1px solid rgba(160,100,255,0.15)', background: 'rgba(0,0,0,0.3)' }}
               >
-                {/* Row header — click to expand */}
                 <button
                   className="w-full flex items-center justify-between px-4 py-3 text-left"
                   onClick={() => toggle(run.id)}
@@ -584,7 +565,6 @@ function HistoryTab({
                   </div>
                 </button>
 
-                {/* Expanded detail */}
                 {open && (
                   <div
                     className="px-4 pb-4 flex flex-col gap-2"
@@ -627,7 +607,6 @@ function HistoryTab({
         </div>
       )}
 
-      {/* Unmatched reports (no run association found) */}
       {unmatchedReports.length > 0 && (
         <div className="mt-6">
           <p className="text-xs font-bold tracking-[3px] uppercase mb-3" style={{ color: 'rgba(200,170,255,0.25)' }}>
@@ -642,7 +621,6 @@ function HistoryTab({
   );
 }
 
-// ── Admin unlock modal (secret red-eye) ─────────────────────────────────────
 function AdminModal({ onClose, onUnlocked }: { onClose: () => void; onUnlocked: (pw: string) => void }) {
   const [pw,      setPw]      = useState('');
   const [error,   setError]   = useState('');
@@ -688,7 +666,6 @@ function AdminModal({ onClose, onUnlocked }: { onClose: () => void; onUnlocked: 
           <X size={14} />
         </button>
 
-        {/* Small red eye */}
         <div className="flex justify-center mb-4">
           <svg viewBox="0 0 80 48" style={{ width: 48, overflow: 'visible' }}>
             <defs><clipPath id="admin-eye-clip"><path d="M3,24 Q40,-7 77,24 Q40,55 3,24" /></clipPath></defs>
@@ -745,7 +722,6 @@ function AdminModal({ onClose, onUnlocked }: { onClose: () => void; onUnlocked: 
   );
 }
 
-// ── Main page ────────────────────────────────────────────────────────────────
 const ADMIN_STORAGE_KEY = 'riva-admin-pw';
 
 export default function Home() {
@@ -761,8 +737,6 @@ export default function Home() {
   const [submitLoading, setSubmitLoading] = useState(false);
   const [runs,    setRuns]    = useState<RunEntry[]>([]);
   const [reports, setReports] = useState<ReportFile[]>([]);
-  // clearLoading is now inside ClearModal
-
   const rivaPupilRef  = useRef<SVGGElement>(null);
   const rivaLidRef    = useRef<SVGRectElement>(null);
   const compPupilRef  = useRef<SVGGElement>(null);
@@ -770,7 +744,6 @@ export default function Home() {
   const smileRef      = useRef<SVGPathElement>(null);
   const ctaRef        = useRef<HTMLDivElement>(null);
 
-  // Load persisted admin password
   useEffect(() => {
     try {
       const saved = localStorage.getItem(ADMIN_STORAGE_KEY);
@@ -786,7 +759,6 @@ export default function Home() {
     return h;
   }
 
-  // Fetch daily limit
   const fetchLimit = useCallback(() => {
     fetch(`${API_BASE}/daily-limit`, { headers: clientHeaders() })
       .then(r => r.json())
@@ -794,7 +766,6 @@ export default function Home() {
       .catch(() => setRunsLoaded(true));
   }, []);
 
-  // Fetch history (runs + reports)
   const fetchHistory = useCallback(() => {
     fetch(`${API_BASE}/runs`)
       .then(r => r.json())
@@ -814,7 +785,7 @@ export default function Home() {
   }, [fetchLimit, fetchHistory]);
 
 
-  // Sentient eye loops
+  // eye animation loops - each eye has independent pupil movement and blinking
   useEffect(() => {
     let alive = true;
     function blink(lid: SVGRectElement | null) {
@@ -838,7 +809,7 @@ export default function Home() {
     return () => { alive = false; };
   }, []);
 
-  // Magnetic smile
+  // smile curve warps toward the cursor when mouse is within 400px
   useEffect(() => {
     function onMove(e: MouseEvent) {
       const cta   = ctaRef.current;
@@ -864,7 +835,6 @@ export default function Home() {
     document.getElementById('input-section')?.scrollIntoView({ behavior: 'smooth' });
   }
 
-  // Phase 1: validate inputs and show the site-type reminder popup
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!rivaUrl.trim() && !compUrl.trim()) return;
@@ -872,7 +842,6 @@ export default function Home() {
     setShowPopup(true);
   }
 
-  // Phase 2: called when user clicks "Got it" in the popup
   async function doSubmit() {
     setShowPopup(false);
     setSubmitLoading(true);
@@ -893,13 +862,12 @@ export default function Home() {
       setRunsUsed(data.used ?? runsUsed + 1);
       fetchHistory();
     } catch {
-      // Server unreachable — proceed anyway so UX isn't blocked
+      // server unreachable, proceed anyway - the dashboard will handle it
     }
     setSubmitLoading(false);
     const params = new URLSearchParams();
     if (rivaUrl.trim()) params.set('riva', rivaUrl.trim());
     if (compUrl.trim()) params.set('comp', compUrl.trim());
-    // run_id makes each submission unique so the dashboard never restores stale session data
     params.set('run_id', runId);
     router.push(`/dashboard?${params.toString()}`);
   }
@@ -922,7 +890,6 @@ export default function Home() {
         />
       )}
 
-      {/* ── HERO ─────────────────────────────────────────────────── */}
       <section
         className="min-h-screen flex flex-col items-center justify-center relative overflow-hidden"
         style={{ background: 'radial-gradient(ellipse at 50% 40%, #2a1a60 0%, #1a0d40 35%, #0d0820 70%, #060412 100%)' }}
@@ -946,9 +913,7 @@ export default function Home() {
             Agentic Competitive Analysis Tool
           </p>
 
-          {/* Dual eyes */}
           <div className="flex gap-8 sm:gap-24 mb-14">
-            {/* Riva eye — cyan */}
             <div className="w-36 sm:w-64 text-center">
               <svg viewBox="0 0 200 120" overflow="visible">
                 <defs><clipPath id="eye-clip-r"><path d="M10,60 Q100,-15 190,60 Q100,135 10,60" /></clipPath></defs>
@@ -964,7 +929,7 @@ export default function Home() {
               </svg>
             </div>
 
-            {/* Competitor eye — red (secret admin click zone) */}
+            {/* clicking the red eye opens the admin modal */}
             <div
               className="w-36 sm:w-64 text-center cursor-pointer select-none"
               onClick={() => setShowAdminModal(true)}
@@ -986,7 +951,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Magnetic smile CTA */}
           <div ref={ctaRef} onClick={scrollToInput} className="flex flex-col items-center cursor-pointer select-none" style={{ animation: 'breath 4s infinite ease-in-out' }}>
             <svg viewBox="0 0 200 60" style={{ width: 220, overflow: 'visible' }}>
               <path ref={smileRef} d="M20,10 Q100,50 180,10" fill="none" stroke="#c8aaff" strokeWidth="2.5" strokeLinecap="round" style={{ transition: 'stroke 0.2s' }} />
@@ -1000,13 +964,11 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ── INPUT + HISTORY SECTION ───────────────────────────────── */}
       <section
         id="input-section"
         className="min-h-screen flex flex-col items-center justify-center px-4 sm:px-8 py-20"
         style={{ background: 'radial-gradient(ellipse at 50% 50%, #1a1040 0%, #0d0820 50%, #060412 100%)' }}
       >
-        {/* Tab switcher */}
         <div className="flex gap-1 mb-8 p-1 rounded-xl" style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(160,100,255,0.15)' }}>
           {(['new', 'history'] as const).map(tab => (
             <button
@@ -1024,7 +986,6 @@ export default function Home() {
           ))}
         </div>
 
-        {/* ── NEW ANALYSIS TAB ── */}
         {activeTab === 'new' && (
           <div className="w-full max-w-3xl">
             <p className="text-sm mb-10" style={{ color: 'rgba(200,170,255,0.35)', letterSpacing: '1px' }}>
@@ -1033,7 +994,6 @@ export default function Home() {
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               <div className="flex flex-col sm:flex-row gap-4">
-                {/* Your site */}
                 <div className="flex-1">
                   <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase" style={{ color: '#4db8ff', opacity: 0.6 }}>Your Site</div>
                   <div className="flex items-center border rounded-lg px-4 py-3 gap-3" style={{ borderColor: 'rgba(77,184,255,0.55)', background: 'rgba(0,0,0,0.45)' }}>
@@ -1051,7 +1011,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Competitor */}
                 <div className="flex-1">
                   <div className="mb-1.5 text-[10px] font-bold tracking-[4px] uppercase flex items-center gap-2" style={{ color: '#ff6b6b', opacity: 0.6 }}>
                     Competing Product
@@ -1073,7 +1032,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Submit */}
               <div className="flex justify-center mt-2">
                 <button
                   type="submit"
@@ -1101,10 +1059,8 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* Daily limit progress bar */}
               {runsLoaded && (
                 <div className="flex flex-col items-center gap-2 mt-3">
-                  {/* Count */}
                   <div className="flex items-center gap-2">
                     <span className="text-[11px]" style={{ color: 'rgba(200,170,255,0.45)', letterSpacing: '0.5px' }}>
                       {runsUsed} / {DAILY_LIMIT} runs today
@@ -1115,7 +1071,6 @@ export default function Home() {
                       </span>
                     )}
                   </div>
-                  {/* Bar */}
                   <div className="w-48 h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>
                     <div
                       className="h-full rounded-full transition-all duration-500"
@@ -1133,7 +1088,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* ── HISTORY TAB ── */}
         {activeTab === 'history' && (
           <HistoryTab
             runs={runs}

@@ -1,3 +1,5 @@
+// Main dashboard: live browser panels for riva and comp agents, inference
+// log for vectorization progress, and the report generation panel.
 'use client';
 
 import { useEffect, useRef, useState, Suspense } from 'react';
@@ -36,9 +38,6 @@ function now() {
   });
 }
 
-// ---------------------------------------------------------------------------
-// SmallEye
-// ---------------------------------------------------------------------------
 function SmallEye({ color, bgFill, darkFill, lidFill, glowId, size = 44, agentState = 'info' }: {
   color: string; bgFill: string; darkFill: string; lidFill: string;
   glowId: string; size?: number; agentState?: string;
@@ -140,9 +139,6 @@ function SmallEye({ color, bgFill, darkFill, lidFill, glowId, size = 44, agentSt
   );
 }
 
-// ---------------------------------------------------------------------------
-// MiniLog
-// ---------------------------------------------------------------------------
 function MiniLog({
   thoughts, color, accentColor, domain, eyeBgFill, eyeDarkFill, eyeLidFill, glowId,
   expanded, onToggle,
@@ -195,9 +191,6 @@ function MiniLog({
   );
 }
 
-// ---------------------------------------------------------------------------
-// BrowserPanel
-// ---------------------------------------------------------------------------
 function BrowserPanel({
   label, frameSrc, active, isPaused, isComplete, wsActive,
   stuckMilestone, canSkip, dimmed, onTogglePause, onSkip, onInteraction, onGoto, onRestart,
@@ -220,7 +213,6 @@ function BrowserPanel({
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden" style={{ background: 'rgba(0,0,0,0.35)' }}>
-      {/* toolbar */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-white/5 shrink-0"
         style={{ background: 'rgba(0,0,0,0.22)' }}>
         {isComplete ? (
@@ -232,7 +224,6 @@ function BrowserPanel({
           </div>
         ) : (
           <>
-            {/* Pause button — pulses when skip is available to hint user */}
             <button onClick={onTogglePause}
               className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
               style={{
@@ -250,7 +241,6 @@ function BrowserPanel({
               {isPaused ? <Play size={9} fill="currentColor" /> : <Pause size={9} fill="currentColor" />}
               {isPaused ? 'resume' : 'pause'}
             </button>
-            {/* Skip button */}
             <button onClick={canSkip ? onSkip : undefined}
               className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
               disabled={!canSkip}
@@ -296,7 +286,6 @@ function BrowserPanel({
         </div>
       </div>
 
-      {/* viewport */}
       <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden"
         onClick={handleClick}
         style={{ cursor: active && frameSrc && !isComplete ? 'crosshair' : 'default' }}>
@@ -314,7 +303,6 @@ function BrowserPanel({
           </div>
         )}
 
-        {/* dim overlay when other agent is stuck */}
         {dimmed && !isComplete && (
           <div className="absolute inset-0 pointer-events-none"
             style={{ background: 'rgba(5,9,18,0.55)', transition: 'opacity 0.4s ease' }} />
@@ -373,9 +361,6 @@ function BrowserPanel({
   );
 }
 
-// ---------------------------------------------------------------------------
-// InferenceLogPanel
-// ---------------------------------------------------------------------------
 function InferenceLogPanel({
   logs, status, hasReports, bottomExpanded, onToggleBottom,
 }: {
@@ -436,20 +421,18 @@ function InferenceLogPanel({
   );
 }
 
-// ---------------------------------------------------------------------------
-// FocusPanel — replaces chat; user describes what to compare, triggers PDF
-// ---------------------------------------------------------------------------
 function FocusPanel({
-  onSubmit, pipelineStatus, reportGenerating, bottomExpanded, onToggleBottom,
+  onSubmit, pipelineStatus, reportGenerating, bottomExpanded, onToggleBottom, sessionInvalid,
 }: {
   onSubmit: (focus: string) => void;
   pipelineStatus: string;
   reportGenerating: boolean;
   bottomExpanded: boolean;
   onToggleBottom: () => void;
+  sessionInvalid: boolean;
 }) {
   const [focus, setFocus] = useState('');
-  const pipelineReady = pipelineStatus === 'ready';
+  const pipelineReady = pipelineStatus === 'ready' && !sessionInvalid;
 
   function submit() {
     if (!focus.trim() || !pipelineReady || reportGenerating) return;
@@ -457,16 +440,19 @@ function FocusPanel({
   }
 
   const placeholder =
+    sessionInvalid             ? 'session stopped — invalid URL' :
     pipelineStatus === 'vectorizing' ? 'vectorizing data...' :
     pipelineStatus === 'ready'       ? 'e.g. pricing tiers, developer experience, enterprise features...' :
     'waiting for agents to finish...';
 
   const statusLabel =
+    sessionInvalid             ? '✕ session stopped — please go back and enter a valid product URL' :
     pipelineStatus === 'vectorizing' ? '⏳ indexing data — report will unlock when complete' :
     pipelineStatus === 'ready'       ? 'data ready — describe your focus and generate the report' :
     'waiting for browser agents...';
 
   const statusColor =
+    sessionInvalid             ? '#d46060' :
     pipelineStatus === 'vectorizing' ? '#c8a84a' :
     pipelineStatus === 'ready'       ? '#6dc08a' :
     '#3a3a4e';
@@ -557,10 +543,7 @@ function FocusPanel({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Report section
-// ---------------------------------------------------------------------------
-type ReportEntry = { type: 'pdf' | 'pptx'; url: string; previewUrl: string; filename: string };
+type ReportEntry = { type: 'pdf'; url: string; previewUrl: string; filename: string };
 
 function downloadBlob(url: string, filename: string) {
   fetch(url)
@@ -582,7 +565,7 @@ function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
   if (reports.length === 0) return null;
 
   return (
-    // Constrained width + centered so iframes are narrower — shows more PDF content
+    // constrained width keeps iframes narrower so PDF content is readable
     <div className="shrink-0 rounded-lg overflow-hidden mx-auto"
       style={{
         border: '1px solid rgba(149,128,200,0.2)',
@@ -624,7 +607,7 @@ function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
                   style={{ background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                   <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)',
                     fontFamily: "'DM Sans', sans-serif", letterSpacing: '1px' }}>
-                    {r.type === 'pdf' ? 'one-pager report' : 'powerpoint deck'}
+                    one-pager report
                   </span>
                   <div className="flex items-center gap-2">
                     {r.type === 'pdf' && (
@@ -649,8 +632,8 @@ function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
                 <iframe
                   src={previewUrl}
                   className="flex-1 w-full border-0"
-                  title={`${r.type} preview`}
-                  style={{ background: r.type === 'pdf' ? 'white' : '#050912' }}
+                  title="pdf preview"
+                  style={{ background: 'white' }}
                 />
               </div>
             );
@@ -661,9 +644,6 @@ function ReportPreviewSection({ reports }: { reports: ReportEntry[] }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Dashboard
-// ---------------------------------------------------------------------------
 export default function Dashboard() {
   return (
     <Suspense fallback={<div>Loading...</div>}>
@@ -679,16 +659,14 @@ function DashboardContent() {
   const compUrl      = searchParams.get('comp') || '';
   const runId        = searchParams.get('run_id') || '';
 
-  // Include run_id in storage key so each new submission gets a fresh session.
-  // History/restore only happens when run_id is absent (e.g. user navigates back manually).
+  // run_id in the key means each new submission gets a fresh session, not a restored one
   const storageKey = runId
     ? `riva-session:${runId}`
     : `riva-session:${rivaUrl}|${compUrl}`;
 
   const sessionIdRef    = useRef(crypto.randomUUID());
-  // Ref checked synchronously in WS effects before state update propagates
   const isRestoringRef  = useRef(false);
-  // storageChecked gates WS connections — prevents connecting before we know if we're restoring
+  // storageChecked gates WS connections so we don't connect before knowing if we're restoring
   const [storageChecked, setStorageChecked] = useState(false);
 
   const [rivaThoughts,  setRivaThoughts]  = useState<Thought[]>([]);
@@ -703,9 +681,8 @@ function DashboardContent() {
   const [rivaWsState,   setRivaWsState]   = useState<'connecting'|'open'|'closed'>('connecting');
   const [compWsState,   setCompWsState]   = useState<'connecting'|'open'|'closed'>('connecting');
 
-  // Check sessionStorage FIRST. Sets isRestoringRef synchronously so WS effects
-  // read the correct value when storageChecked flips to true.
-  // If run_id is in the URL this is always a fresh run — skip restore entirely.
+  // check sessionStorage before anything connects - isRestoringRef is set synchronously
+  // so the WS effects read the right value when storageChecked becomes true
   useEffect(() => {
     if (!runId && (rivaUrl || compUrl)) {
       try {
@@ -726,7 +703,6 @@ function DashboardContent() {
         }
       } catch { /* ignore */ }
     }
-    // Clear stale URL-pair session so a future manual navigation doesn't restore stale data
     if (runId) {
       try { sessionStorage.removeItem(`riva-session:${rivaUrl}|${compUrl}`); } catch {}
     }
@@ -747,6 +723,7 @@ function DashboardContent() {
   const [compCanSkip,      setCompCanSkip]      = useState(false);
   const [logsExpanded,     setLogsExpanded]     = useState(true);
   const [bottomExpanded,   setBottomExpanded]   = useState(false);
+  const [sessionInvalid,   setSessionInvalid]   = useState<{ side: string; reason?: string } | null>(null);
 
   // Persist UI state
   useEffect(() => {
@@ -800,7 +777,7 @@ function DashboardContent() {
   const compWsRef     = useRef<WebSocket | null>(null);
   const pipelineWsRef = useRef<WebSocket | null>(null);
 
-  // Pipeline WebSocket — gated on storageChecked
+  // pipeline WebSocket, only open after storage is confirmed
   useEffect(() => {
     if (!storageChecked) return;
     if (isRestoringRef.current || !sessionId || expected === 0) return;
@@ -813,7 +790,7 @@ function DashboardContent() {
       else if (msg.type === 'report_ready') {
         setReportGenerating(false);
         setReports(prev => [...prev, {
-          type: msg.report_type as 'pdf' | 'pptx',
+          type: 'pdf',
           url: msg.url,
           previewUrl: msg.preview_url || msg.url,
           filename: msg.filename,
@@ -824,7 +801,7 @@ function DashboardContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, storageChecked]);
 
-  // Riva browse WebSocket — gated on storageChecked
+  // Riva browse WebSocket, only open after storage is confirmed
   useEffect(() => {
     if (!storageChecked) return;
     if (isRestoringRef.current || !rivaUrl) { setRivaWsState('closed'); return; }
@@ -840,12 +817,17 @@ function DashboardContent() {
       else if (msg.type === 'auto_pause')     setRivaPaused(true);
       else if (msg.type === 'stuck_guidance') setRivaStuckMilestone(msg.milestone);
       else if (msg.type === 'browse_complete') { setRivaComplete(true); setRivaStuckMilestone(null); }
+      else if (msg.type === 'session_invalid') {
+        setSessionInvalid({ side: 'riva' });
+        setPipelineLogs([]);
+        pipelineWsRef.current?.close();
+      }
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rivaUrl, storageChecked]);
 
-  // Comp browse WebSocket — gated on storageChecked
+  // competitor browse WebSocket, only open after storage is confirmed
   useEffect(() => {
     if (!storageChecked) return;
     if (isRestoringRef.current || !compUrl) { setCompWsState('closed'); return; }
@@ -861,6 +843,11 @@ function DashboardContent() {
       else if (msg.type === 'auto_pause')     setCompPaused(true);
       else if (msg.type === 'stuck_guidance') setCompStuckMilestone(msg.milestone);
       else if (msg.type === 'browse_complete') { setCompComplete(true); setCompStuckMilestone(null); }
+      else if (msg.type === 'session_invalid') {
+        setSessionInvalid({ side: 'comp' });
+        setPipelineLogs([]);
+        pipelineWsRef.current?.close();
+      }
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -919,7 +906,6 @@ function DashboardContent() {
   const RIVA_COLOR = 'rgba(77,184,255,0.55)';
   const COMP_COLOR = 'rgba(255,107,107,0.55)';
 
-  // HITL: when one agent is stuck, dim the other and pulse the stuck one's border
   const rivaIsStuck  = rivaStuckMilestone !== null && !rivaComplete;
   const compIsStuck  = compStuckMilestone !== null && !compComplete;
   const rivaIsDimmed = compIsStuck && !rivaComplete;
@@ -948,7 +934,6 @@ function DashboardContent() {
         style={{ background: 'linear-gradient(135deg, #0e0d2b 0%, #1a1040 40%, #0d0820 100%)',
           fontFamily: "'DM Sans', system-ui, sans-serif", minHeight: '100vh' }}>
 
-        {/* ── Navbar ── */}
         <div className="flex justify-center px-6 pt-4 pb-2 shrink-0">
           <header className="flex items-center justify-between px-5 py-2.5 rounded-full w-full"
             style={{
@@ -986,13 +971,9 @@ function DashboardContent() {
           </header>
         </div>
 
-        {/* ── Main — active area is viewport-height, report section pushes page taller ── */}
         <div className="px-3 flex flex-col">
-
-          {/* Active area — locked to viewport height, never squished by report below */}
           <div className="flex flex-col shrink-0" style={{ height: 'calc(100vh - 88px)' }}>
 
-            {/* Mini logs row */}
             {(rivaUrl || compUrl) && (
               <div className="flex gap-2 shrink-0 pt-2 pb-1.5">
                 {rivaUrl && (
@@ -1018,7 +999,36 @@ function DashboardContent() {
               </div>
             )}
 
-            {/* Browser panels */}
+            {/* Session invalid banner */}
+            {sessionInvalid && (
+              <div className="shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-lg mb-1"
+                style={{
+                  background: 'rgba(212,96,96,0.1)',
+                  border: '1px solid rgba(212,96,96,0.4)',
+                  animation: 'stuckFadeIn 0.4s cubic-bezier(0.22,1,0.36,1) both',
+                }}>
+                <span style={{ fontSize: 14 }}>✕</span>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#e87070',
+                    letterSpacing: '1px', fontFamily: "'DM Sans', sans-serif" }}>
+                    Invalid URL — session stopped
+                  </div>
+                  <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)',
+                    fontFamily: "'DM Sans', sans-serif", marginTop: 2 }}>
+                    The {sessionInvalid.side} URL doesn&apos;t appear to be a software product with pricing and documentation.
+                    Go back and try a different URL (e.g. stripe.com, vercel.com).
+                  </div>
+                </div>
+                <button onClick={() => { try { sessionStorage.removeItem(storageKey); } catch {} router.push('/'); }}
+                  className="ml-auto px-3 py-1 rounded-full shrink-0 transition-all"
+                  style={{ background: 'rgba(212,96,96,0.15)', color: '#e87070',
+                    border: '1px solid rgba(212,96,96,0.4)', fontSize: 9, fontWeight: 600,
+                    letterSpacing: '1.5px', fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
+                  ← go back
+                </button>
+              </div>
+            )}
+
             <div className="flex-1 flex flex-col md:flex-row min-h-0 gap-2 pb-2">
               {rivaUrl && (
                 <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
@@ -1060,7 +1070,6 @@ function DashboardContent() {
               )}
             </div>
 
-            {/* Bottom: inference logs + focus/report panel */}
             <div className="flex flex-col sm:flex-row shrink-0 rounded-lg overflow-hidden mb-3"
               style={{
                 height: bottomExpanded ? 400 : 240,
@@ -1078,12 +1087,12 @@ function DashboardContent() {
                   pipelineStatus={pipelineStatus}
                   reportGenerating={reportGenerating}
                   bottomExpanded={bottomExpanded}
-                  onToggleBottom={() => setBottomExpanded(v => !v)} />
+                  onToggleBottom={() => setBottomExpanded(v => !v)}
+                  sessionInvalid={!!sessionInvalid} />
               </div>
             </div>
           </div>
 
-          {/* Report section — sits below active area, expands the page downward */}
           {reports.length > 0 && <ReportPreviewSection reports={reports} />}
         </div>
       </div>
