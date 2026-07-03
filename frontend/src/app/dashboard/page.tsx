@@ -193,7 +193,7 @@ function MiniLog({
 
 function BrowserPanel({
   label, frameSrc, active, isPaused, isComplete, wsActive,
-  stuckMilestone, canSkip, dimmed, onTogglePause, onSkip, onInteraction, onGoto, onRestart,
+  stuckMilestone, canSkip, dimmed, pagesScraped, onTogglePause, onSkip, onFinish, onInteraction, onGoto, onRestart,
 }: any) {
   const [manualUrl, setManualUrl] = useState('');
 
@@ -257,6 +257,20 @@ function BrowserPanel({
               <ArrowRight size={9} />
               skip
             </button>
+            {pagesScraped >= 30 && (
+              <button onClick={onFinish}
+                className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
+                style={{
+                  background: 'rgba(110,176,232,0.15)',
+                  color: '#6eb0e8',
+                  border: '1px solid rgba(110,176,232,0.5)',
+                  fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
+                  fontFamily: "'DM Sans', sans-serif",
+                  animation: 'pulseSkipHint 2s ease-in-out infinite 1s',
+                }}>
+                ✓ finish
+              </button>
+            )}
           </>
         )}
         <div className="flex-1 flex gap-2">
@@ -724,6 +738,8 @@ function DashboardContent() {
   const [logsExpanded,     setLogsExpanded]     = useState(true);
   const [bottomExpanded,   setBottomExpanded]   = useState(false);
   const [sessionInvalid,   setSessionInvalid]   = useState<{ side: string; reason?: string } | null>(null);
+  const [rivaPagesScraped, setRivaPagesScraped] = useState(0);
+  const [compPagesScraped, setCompPagesScraped] = useState(0);
 
   // Persist UI state
   useEffect(() => {
@@ -815,6 +831,7 @@ function DashboardContent() {
       if (msg.type === 'frame')               setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
       else if (msg.type === 'thought')        setRivaThoughts(p => [...p, { ...msg, ts: now() }]);
       else if (msg.type === 'auto_pause')     setRivaPaused(true);
+      else if (msg.type === 'page_saved')     setRivaPagesScraped(p => p + 1);
       else if (msg.type === 'stuck_guidance') setRivaStuckMilestone(msg.milestone);
       else if (msg.type === 'browse_complete') { setRivaComplete(true); setRivaStuckMilestone(null); }
       else if (msg.type === 'session_invalid') {
@@ -841,6 +858,7 @@ function DashboardContent() {
       if (msg.type === 'frame')               setCompFrame(`data:image/jpeg;base64,${msg.data}`);
       else if (msg.type === 'thought')        setCompThoughts(p => [...p, { ...msg, ts: now() }]);
       else if (msg.type === 'auto_pause')     setCompPaused(true);
+      else if (msg.type === 'page_saved')     setCompPagesScraped(p => p + 1);
       else if (msg.type === 'stuck_guidance') setCompStuckMilestone(msg.milestone);
       else if (msg.type === 'browse_complete') { setCompComplete(true); setCompStuckMilestone(null); }
       else if (msg.type === 'session_invalid') {
@@ -869,6 +887,10 @@ function DashboardContent() {
 
   function skipBrowse(side: 'riva' | 'comp') {
     sendToWs(side === 'riva' ? rivaWsRef : compWsRef, { type: 'skip' });
+  }
+
+  function finishBrowse(side: 'riva' | 'comp') {
+    sendToWs(side === 'riva' ? rivaWsRef : compWsRef, { type: 'finish' });
   }
 
   function restartBrowse(url: string, side: 'riva' | 'comp') {
@@ -1042,8 +1064,10 @@ function DashboardContent() {
                   <BrowserPanel label="riva" frameSrc={rivaFrame} active
                     isPaused={rivaPaused} isComplete={rivaComplete} wsActive={rivaWsState === 'open'}
                     stuckMilestone={rivaStuckMilestone} canSkip={rivaCanSkip} dimmed={rivaIsDimmed}
+                    pagesScraped={rivaPagesScraped}
                     onTogglePause={() => togglePause('riva')}
                     onSkip={() => skipBrowse('riva')}
+                    onFinish={() => finishBrowse('riva')}
                     onInteraction={(t: string, x: number, y: number) => sendToWs(rivaWsRef, { type: t, x, y })}
                     onGoto={(url: string) => { setRivaStuckMilestone(null); sendToWs(rivaWsRef, { type: 'goto', url }); }}
                     onRestart={(url: string) => restartBrowse(url, 'riva')} />
@@ -1061,8 +1085,10 @@ function DashboardContent() {
                   <BrowserPanel label="comp" frameSrc={compFrame} active
                     isPaused={compPaused} isComplete={compComplete} wsActive={compWsState === 'open'}
                     stuckMilestone={compStuckMilestone} canSkip={compCanSkip} dimmed={compIsDimmed}
+                    pagesScraped={compPagesScraped}
                     onTogglePause={() => togglePause('comp')}
                     onSkip={() => skipBrowse('comp')}
+                    onFinish={() => finishBrowse('comp')}
                     onInteraction={(t: string, x: number, y: number) => sendToWs(compWsRef, { type: t, x, y })}
                     onGoto={(url: string) => { setCompStuckMilestone(null); sendToWs(compWsRef, { type: 'goto', url }); }}
                     onRestart={(url: string) => restartBrowse(url, 'comp')} />

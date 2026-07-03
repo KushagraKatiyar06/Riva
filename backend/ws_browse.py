@@ -295,6 +295,7 @@ async def browse_websocket(
                 save_extract(domain, "docs", landing_url, text)
                 save_intel("docs", landing_url, text)
                 thought(f"Docs page 1 saved ({len(text):,} chars)", "found")
+                thought_q.put({"type": "page_saved"})
 
                 links: list[str] = page.evaluate("""() => {
                     const host = window.location.hostname;
@@ -330,6 +331,7 @@ async def browse_websocket(
                         save_intel("docs", link, text)
                         visited.add(link)
                         count += 1
+                        thought_q.put({"type": "page_saved"})
                     except Exception as e:
                         thought(f"Docs crawl skip: {e}", "info")
 
@@ -660,6 +662,7 @@ async def browse_websocket(
                                 save_intel("pricing", curr_url, content)
                                 save_extract(finishing_domain, "pricing", curr_url, content)
                                 thought(f"Pricing saved ({len(content):,} chars).", "found")
+                                thought_q.put({"type": "page_saved"})
                                 objectives["pricing"] = True
                                 progress = True
                                 page.goto(target_url, wait_until="domcontentloaded")
@@ -1018,6 +1021,10 @@ async def browse_websocket(
                         stop_event.set()
                         pause_event.set()
                         # run_browser will call mark_complete and emit browse_complete when it exits
+                    elif dtype == "finish":
+                        thought_q.put({"text": "Finishing early — wrapping up with pages collected so far.", "state": "complete"})
+                        stop_event.set()
+                        pause_event.set()
                     else:
                         action_q.put(data)
                 except Exception:
