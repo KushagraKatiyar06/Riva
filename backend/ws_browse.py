@@ -46,6 +46,7 @@ async def browse_websocket(
     try:
         init_data  = await websocket.receive_json()
         target_url = init_data.get("url", "").strip()
+        init_query = init_data.get("query", "").strip()
         if not target_url:
             await websocket.close(code=1008, reason="No URL provided")
             return
@@ -66,6 +67,7 @@ async def browse_websocket(
 
             objectives    = {"pricing": False, "docs": False}
             visited_urls: list[str] = []
+            user_query: str = init_query  # set from WS init; non-empty means query already known
             gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
             def thought(text: str, state: str = "info"):
@@ -171,11 +173,15 @@ async def browse_websocket(
                 if already_tried:
                     tried_note = f"ALREADY TRIED on this page: {', '.join(sorted(already_tried))}\n"
 
+                vectorized_note = "NOTE: This domain is already in our knowledge base.\n" if already_vectorized else ""
+                query_note = f"USER QUERY (for docs phase): {user_query}\n" if user_query else ""
+
                 prompt = (
                     f"Riva Pathfinder Mission — current page: {current_url}\n"
                     f"MILESTONES : {p_text} | {d_text}\n"
                     f"RECENT URLS: {recent}\n"
                     f"{tried_note}"
+                    f"{vectorized_note}{query_note}"
                     f"PAGE HEADINGS & NAV & FOOTER: {headings[:1200]}\n\n"
                     "RULES:\n"
                     "- Only pursue NOT_STARTED milestones.\n"
@@ -338,11 +344,256 @@ async def browse_websocket(
                 thought(f"Docs crawl complete — {count} pages saved.", "found")
                 return count
 
+            def check_relevance(content: str) -> bool:
+                # Ask Gemini if this page answers the user's query
+                try:
+                    prompt = (
+                        f"A user is researching: '{user_query}'\n\n"
+                        f"Page content excerpt:\n{content[:2500]}\n\n"
+                        "Does this page contain specific, useful information to help answer the user's research question?\n"
+                        "Reply with only YES or NO."
+                    )
+                    res = gemini_client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=prompt,
+                        config=genai_types.GenerateContentConfig(
+                            http_options=genai_types.HttpOptions(timeout=8000),
+                        ),
+                    )
+                    return "yes" in res.text.strip().lower()
+                except Exception:
+                    return True  # on error, include the page
+
+            def ask_docs_brain(content: str, current_url: str, headings: str,
+                               screenshot_bytes: bytes | None = None,
+                               docs_visited: set | None = None) -> dict:
+                nonlocal gemini_fail_count
+                if not GEMINI_API_KEY:
+                    return {"goal": "DONE", "thought": "Missing GEMINI_API_KEY"}
+
+                visited_note = ""
+                if docs_visited:
+                    visited_note = f"ALREADY CHECKED (don't revisit): {', '.join(list(docs_visited)[-15:])}\n"
+
+                vectorized_note = ""
+                if already_vectorized:
+                    vectorized_note = "NOTE: This domain is already in our knowledge base — but we need specific content for this query.\n"
+
+                prompt = (
+                    f"Documentation Intelligence Mission — current page: {current_url}\n"
+                    f"USER RESEARCH QUERY: {user_query}\n"
+                    f"{vectorized_note}"
+                    f"{visited_note}"
+                    f"RECENT URLS: {visited_urls[-5:]}\n"
+                    f"PAGE HEADINGS & NAV: {headings[:1200]}\n\n"
+                    "TASK: Navigate through documentation to find pages specifically relevant to the user's research query.\n"
+                    "RULES:\n"
+                    "- Focus ONLY on content relevant to the user's query — ignore unrelated sections.\n"
+                    "- Click links to doc sections or topics that match the query.\n"
+                    "- HOVER over nav menus (e.g. 'API Reference', 'Guides', 'SDK') to reveal sub-sections.\n"
+                    "- If the current page looks relevant to the query, reply with goal SURVEY (we will check it).\n"
+                    "- SCROLL to see more nav links if none are visible yet.\n"
+                    "- Reply DONE when you have exhausted relevant sections or can't find more.\n"
+                    "- Do NOT revisit URLs in ALREADY CHECKED.\n\n"
+                    'Reply ONLY with JSON (no markdown):\n'
+                    '{"thought":"..","goal":"CLICK"|"HOVER"|"SCROLL"|"SURVEY"|"DONE","target":"element label (for CLICK/HOVER only)"}\n\n'
+                    f"Page text:\n{content[:5000]}"
+                )
+
+                def _call():
+                    if screenshot_bytes:
+                        contents = [
+                            genai_types.Part.from_bytes(data=screenshot_bytes, mime_type="image/jpeg"),
+                            genai_types.Part.from_text(text=prompt),
+                        ]
+                    else:
+                        contents = prompt
+                    res = gemini_client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=contents,
+                        config=genai_types.GenerateContentConfig(
+                            http_options=genai_types.HttpOptions(timeout=12000),
+                        ),
+                    )
+                    txt = res.text.strip()
+                    if "```" in txt:
+                        txt = txt.split("```")[1].lstrip("json").strip()
+                        txt = txt.split("```")[0].strip()
+                    return json.loads(txt)
+
+                try:
+                    return _call()
+                except Exception as e:
+                    thought(f"Brain error (docs): {e}", "info")
+                    gemini_fail_count += 1
+                    return {"goal": "SCROLL", "thought": "Brain error", "__api_fail__": True}
+
+            def query_guided_docs_search():
+                # Intelligently navigate docs looking only for pages relevant to user_query.
+                # HITL after 6 consecutive misses; finish button appears after 1 relevant page.
+                docs_visited: set[str] = set()
+                docs_fail_count = 0
+
+                for step in range(120):
+                    if stop_event.is_set():
+                        break
+
+                    was_paused = not pause_event.is_set()
+                    while not pause_event.is_set():
+                        handle_gestures(page)
+                        if stop_event.is_set():
+                            break
+                        page.wait_for_timeout(100)
+                    if stop_event.is_set():
+                        break
+
+                    if was_paused:
+                        thought("Resumed — waiting for page to settle...", "info")
+                        page.wait_for_load_state("domcontentloaded")
+                        page.wait_for_timeout(3000)
+
+                    handle_gestures(page)
+
+                    # HITL if too many consecutive misses
+                    if docs_fail_count >= 6:
+                        thought(
+                            f"\u26a0 I've checked {docs_fail_count} pages without finding content about '{user_query}'. "
+                            "Type a section heading (e.g. 'Authentication') or paste a direct URL into the chat below.",
+                            "hitl",
+                        )
+                        thought_q.put({
+                            "type": "docs_hitl",
+                            "prompt": f"Looking for: '{user_query}'. Type a section heading (e.g. 'Webhooks', 'Authentication') or paste a direct URL.",
+                        })
+                        thought_q.put({"type": "auto_pause"})
+                        pause_event.clear()
+                        docs_fail_count = 0
+
+                        hint = None
+                        while not stop_event.is_set() and hint is None:
+                            page.wait_for_timeout(300)
+                            pending = []
+                            while not action_q.empty():
+                                pending.append(action_q.get_nowait())
+                            for act in pending:
+                                if act.get("type") == "docs_hint":
+                                    hint = act.get("value", "").strip()
+                                elif act.get("type") == "goto":
+                                    hint = act.get("url", "")
+                                else:
+                                    action_q.put(act)
+                            if hint:
+                                break
+
+                        if not stop_event.is_set() and hint:
+                            if hint.startswith("http"):
+                                if validate_url(hint):
+                                    thought(f"Navigating to: {hint}", "navigating")
+                                    page.goto(hint, wait_until="domcontentloaded", timeout=12000)
+                                else:
+                                    thought("Blocked: invalid URL.", "error")
+                            else:
+                                thought(f"Looking for section: '{hint}'", "scanning")
+                                el, matched = find_element(page, [hint])
+                                if el:
+                                    thought(f"Found '{matched}' — clicking", "clicking")
+                                    try:
+                                        el.evaluate("el => el.scrollIntoView({behavior:'smooth',block:'center'})")
+                                        page.wait_for_timeout(500)
+                                        el.click(force=True)
+                                        page.wait_for_timeout(2000)
+                                    except Exception as e:
+                                        thought(f"Click failed: {e}", "info")
+                                else:
+                                    thought(f"Couldn't find '{hint}' on this page.", "info")
+                            pause_event.set()
+                        continue
+
+                    # Ask Gemini where to go next
+                    try:
+                        content = page.evaluate("() => document.body.innerText")
+                        headings = page.evaluate(
+                            "() => Array.from(document.querySelectorAll('h1,h2,h3,nav a,header a,footer a,[role=navigation] a'))"
+                            ".map(e => e.innerText.trim()).filter(Boolean).join(' | ')"
+                        )
+                        try:
+                            screenshot_bytes = page.screenshot(type="jpeg", quality=60)
+                        except Exception:
+                            screenshot_bytes = None
+
+                        decision = ask_docs_brain(content, page.url, headings, screenshot_bytes, docs_visited)
+                        goal  = decision.get("goal")
+                        label = decision.get("target", "")
+                        thought(decision.get("thought", "Analyzing..."), "scanning")
+
+                        if goal == "DONE":
+                            thought("Finished searching for relevant documentation.", "complete")
+                            break
+
+                        elif goal == "SURVEY":
+                            curr_url = page.url
+                            docs_visited.add(curr_url)
+                            if check_relevance(content):
+                                text = full_page_extract(page)
+                                save_extract(finishing_domain, "docs", curr_url, text)
+                                save_intel("docs", curr_url, text)
+                                thought(f"Relevant page saved ({len(text):,} chars).", "found")
+                                thought_q.put({"type": "relevant_doc_saved"})
+                                docs_fail_count = 0
+                            else:
+                                docs_fail_count += 1
+                                thought("Page not relevant to query — continuing search.", "info")
+
+                        elif goal in ["CLICK", "HOVER"]:
+                            el, matched = find_element(page, [label]) if label else (None, None)
+                            if el:
+                                thought(f"Navigating to: {matched}", "clicking")
+                                try:
+                                    el.evaluate(
+                                        "el => { el.scrollIntoView({behavior:'smooth',block:'center'});"
+                                        " el.style.outline='4px solid cyan'; }"
+                                    )
+                                    page.wait_for_timeout(600)
+                                    el.hover(force=True)
+                                    if goal == "CLICK":
+                                        url_before = page.url
+                                        el.evaluate("el => el.setAttribute('target', '_self')")
+                                        try:
+                                            el.click(force=True, timeout=3000)
+                                        except Exception:
+                                            el.evaluate("el => el.click()")
+                                        page.wait_for_timeout(2000)
+                                        if page.url == url_before:
+                                            try:
+                                                href = el.evaluate("el => el.href || el.getAttribute('href') || ''")
+                                                if href and href.startswith("http") and href != url_before:
+                                                    thought("Click didn't navigate — going via href", "navigating")
+                                                    page.goto(href, wait_until="domcontentloaded", timeout=10000)
+                                            except Exception:
+                                                pass
+                                    page.wait_for_timeout(1000)
+                                except Exception as e:
+                                    docs_fail_count += 1
+                                    thought(f"Navigation failed ({docs_fail_count}): {e}", "info")
+                            else:
+                                docs_fail_count += 1
+                                thought(f"Element not found ({docs_fail_count}): '{label}'", "info")
+
+                        elif goal == "SCROLL":
+                            page.evaluate("window.scrollBy(0, 600)")
+                            page.wait_for_timeout(500)
+
+                    except Exception as e:
+                        thought(f"Docs step error: {e}", "info")
+
+                    page.wait_for_timeout(500)
+
             # when the user pastes a URL while stuck, we auto-resume instead of waiting for an explicit resume click
             _stuck_pause = False
 
             def handle_gestures(page):
                 nonlocal _stuck_pause
+                deferred = []
                 while not action_q.empty():
                     act  = action_q.get_nowait()
                     try:
@@ -377,22 +628,20 @@ async def browse_websocket(
                                 _stuck_pause = False
                                 thought("URL received — resuming agent.", "info")
                                 pause_event.set()
+                        else:
+                            deferred.append(act)
                     except Exception as e:
                         print(f"Gesture error: {e}")
+                for act in deferred:
+                    action_q.put(act)
 
             finishing_domain = re.sub(
                 r'^www\.', '', urlparse(target_url).hostname or "unknown"
             )
 
-            # skip browser entirely if this domain is already in the vector index
-            if _is_domain_complete(EXTRACTS_DIR / finishing_domain):
-                thought("Domain already fully vectorized — skipping browser.", "complete")
-                finish_session("complete")
-                thought_q.put({"type": "browse_complete"})
-                if session and session in _sessions:
-                    _sessions[session].mark_complete(finishing_domain)
-                thought_q.put({"__sentinel__": True})
-                return
+            already_vectorized = _is_domain_complete(EXTRACTS_DIR / finishing_domain)
+            if already_vectorized:
+                thought("Domain previously indexed — will search for query-specific content.", "info")
 
             # persistent profile per role means cookies/auth survive across runs
             profile_dir = Path(__file__).parent / ".browser_profiles" / (role or "default")
@@ -654,50 +903,30 @@ async def browse_websocket(
                                 or any(k in _page_title for k in _PRICING_CONTENT)
                                 or any(k in _page_h1 for k in _PRICING_CONTENT)
                             ):
-                                thought(
-                                    "Milestone: Pricing page found — extracting.", "found"
-                                )
+                                thought("Milestone: Pricing page found — extracting.", "found")
                                 page.wait_for_timeout(800)
                                 content = full_page_extract(page)
                                 save_intel("pricing", curr_url, content)
                                 save_extract(finishing_domain, "pricing", curr_url, content)
                                 thought(f"Pricing saved ({len(content):,} chars).", "found")
-                                thought_q.put({"type": "page_saved"})
                                 objectives["pricing"] = True
-                                progress = True
-                                page.goto(target_url, wait_until="domcontentloaded")
-
-                            if not objectives["docs"] and curr_url != target_url and (
-                                any(k in curr_lower for k in _DOCS_URL)
-                                or any(k in _page_title for k in _DOCS_CONTENT)
-                                or any(k in _page_h1 for k in _DOCS_CONTENT)
-                            ):
-                                thought("Milestone: Docs found — crawling.", "found")
-                                page.wait_for_timeout(800)
-                                crawl_docs(page, curr_url, finishing_domain)
-                                objectives["docs"] = True
                                 progress = True
 
                             if progress:
                                 frustration     = 0
                                 dead_steps      = 0
-                                suspicion_level = 0  # real progress clears suspicion
-                                if objectives["pricing"] and objectives["docs"]:
-                                    thought("All milestones complete.", "complete")
-                                    break
+                                suspicion_level = 0
+                                if objectives["pricing"]:
+                                    break  # exit to query wait phase
                                 continue
 
                             dead_steps += 1
-                            missing_milestone = "docs" if objectives["pricing"] else "pricing"
+                            missing_milestone = "pricing"
 
                             # Trigger HITL if: 3 consecutive dead steps, OR 4 Gemini API failures total
                             if dead_steps >= 3 or gemini_fail_count >= 4:
                                 suspicion_level += 1
-                                _page_hint = (
-                                    "their Pricing or Plans page"
-                                    if missing_milestone == "pricing"
-                                    else "their Documentation, Docs, or API Reference page"
-                                )
+                                _page_hint = "their Pricing or Plans page"
                                 # If suspicion is high enough, give up entirely rather than asking again
                                 if suspicion_level >= 3:
                                     thought(
@@ -818,14 +1047,8 @@ async def browse_websocket(
                                             )
                                             if frustration >= 3:
                                                 suspicion_level += 1
-                                                milestone = (
-                                                    "docs" if objectives["pricing"] else "pricing"
-                                                )
-                                                _page_hint = (
-                                                    "their Pricing or Plans page"
-                                                    if milestone == "pricing"
-                                                    else "their Documentation, Docs, or API Reference page"
-                                                )
+                                                milestone = "pricing"
+                                                _page_hint = "their Pricing or Plans page"
                                                 thought(
                                                     f"\u26a0 I found what looks like {_page_hint} but can't click into it. "
                                                     f"Go there yourself in your own browser tab, copy the URL from the address bar, "
@@ -850,14 +1073,8 @@ async def browse_websocket(
                                         )
                                         if frustration >= 3:
                                             suspicion_level += 1
-                                            milestone = (
-                                                "docs" if objectives["pricing"] else "pricing"
-                                            )
-                                            _page_hint = (
-                                                "their Pricing or Plans page"
-                                                if milestone == "pricing"
-                                                else "their Documentation, Docs, or API Reference page"
-                                            )
+                                            milestone = "pricing"
+                                            _page_hint = "their Pricing or Plans page"
                                             thought(
                                                 f"\u26a0 I can't find {_page_hint} on my own. "
                                                 f"Open {finishing_domain} in your own browser tab, "
@@ -910,14 +1127,35 @@ async def browse_websocket(
 
                             page.wait_for_timeout(500)
 
+                        # Phase 2: docs search guided by user's query
+                        if objectives["pricing"] and not stop_event.is_set():
+                            if not user_query:
+                                # query wasn't in the WS init — ask the user now (fallback)
+                                thought_q.put({"type": "query_prompt"})
+                                thought("Pricing collected. Waiting for your research question...", "info")
+                                while not stop_event.is_set():
+                                    page.wait_for_timeout(300)
+                                    pending = []
+                                    while not action_q.empty():
+                                        pending.append(action_q.get_nowait())
+                                    found_query = False
+                                    for act in pending:
+                                        if act.get("type") == "query":
+                                            user_query = act.get("text", "").strip()
+                                            found_query = True
+                                        else:
+                                            action_q.put(act)
+                                    if found_query:
+                                        break
+                            if user_query and not stop_event.is_set():
+                                thought(f"Searching for: {user_query}", "info")
+                                query_guided_docs_search()
+                                objectives["docs"] = True
+
                         # If loop exhausted and milestones incomplete, trigger HITL before closing
-                        if not (objectives["pricing"] and objectives["docs"]) and not stop_event.is_set():
-                            missing_milestone = "docs" if objectives["pricing"] else "pricing"
-                            _page_hint = (
-                                "their Pricing or Plans page"
-                                if missing_milestone == "pricing"
-                                else "their Documentation, Docs, or API Reference page"
-                            )
+                        if not objectives["pricing"] and not stop_event.is_set():
+                            _page_hint = "their Pricing or Plans page"
+                            missing_milestone = "pricing"
                             thought(
                                 f"\u26a0 I've run out of steps and still couldn't find {_page_hint}. "
                                 f"Open {finishing_domain} in your own browser tab, go to {_page_hint} yourself, "

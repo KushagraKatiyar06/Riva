@@ -141,13 +141,15 @@ function SmallEye({ color, bgFill, darkFill, lidFill, glowId, size = 44, agentSt
 
 function MiniLog({
   thoughts, color, accentColor, domain, eyeBgFill, eyeDarkFill, eyeLidFill, glowId,
-  expanded, onToggle,
+  expanded, onToggle, docsHitlPrompt, onDocsHint,
 }: {
   thoughts: Thought[]; color: string; accentColor: string; domain: string;
   eyeBgFill: string; eyeDarkFill: string; eyeLidFill: string; glowId: string;
   expanded: boolean; onToggle: () => void;
+  docsHitlPrompt?: string; onDocsHint?: (value: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [hintInput, setHintInput] = useState('');
   useEffect(() => {
     if (expanded && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [thoughts, expanded]);
@@ -157,7 +159,7 @@ function MiniLog({
 
   return (
     <div className="shrink-0 overflow-hidden"
-      style={{ height: expanded ? 200 : 54, transition: 'height 0.25s ease', background: 'rgba(0,0,0,0.28)' }}>
+      style={{ height: expanded ? (docsHitlPrompt ? 270 : 200) : 54, transition: 'height 0.25s ease', background: 'rgba(0,0,0,0.28)' }}>
       <div className="flex items-center justify-between px-2.5 shrink-0"
         style={{ height: 54, background: 'rgba(0,0,0,0.22)', borderBottom: expanded ? `1px solid ${accentColor}22` : 'none' }}>
         <div className="flex items-center gap-3">
@@ -176,16 +178,55 @@ function MiniLog({
         </button>
       </div>
       {expanded && (
-        <div ref={scrollRef} className="overflow-y-auto px-3 py-2 space-y-0.5"
-          style={{ height: 146, fontFamily: "'Fira Code', monospace" }}>
-          {thoughts.length === 0 && <div style={{ fontSize: 10, color: '#3a3a4e' }}>waiting...</div>}
-          {thoughts.map((t, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, fontSize: 10, lineHeight: '19px' }}>
-              <span style={{ flexShrink: 0, color: 'rgba(255,255,255,0.13)' }}>[{t.ts}]</span>
-              <span style={{ color: STATE_COLORS[t.state] ?? '#9a9ab0' }}>{t.text}</span>
+        <>
+          <div ref={scrollRef} className="overflow-y-auto px-3 py-2 space-y-0.5"
+            style={{ height: 146, fontFamily: "'Fira Code', monospace" }}>
+            {thoughts.length === 0 && <div style={{ fontSize: 10, color: '#3a3a4e' }}>waiting...</div>}
+            {thoughts.map((t, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 10, lineHeight: '19px' }}>
+                <span style={{ flexShrink: 0, color: 'rgba(255,255,255,0.13)' }}>[{t.ts}]</span>
+                <span style={{ color: STATE_COLORS[t.state] ?? '#9a9ab0' }}>{t.text}</span>
+              </div>
+            ))}
+          </div>
+          {docsHitlPrompt && (
+            <div className="shrink-0 px-3 py-2 border-t"
+              style={{ borderColor: 'rgba(200,168,74,0.2)', background: 'rgba(0,0,0,0.18)' }}>
+              <div style={{ fontSize: 9, color: '#c8a84a', marginBottom: 5,
+                fontFamily: "'DM Sans', sans-serif", lineHeight: '14px' }}>
+                {docsHitlPrompt}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={hintInput}
+                  onChange={e => setHintInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && hintInput.trim()) {
+                      onDocsHint?.(hintInput.trim());
+                      setHintInput('');
+                    }
+                  }}
+                  placeholder="heading name or https://..."
+                  style={{
+                    flex: 1, fontSize: 10, background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(200,168,74,0.3)', borderRadius: 4,
+                    padding: '4px 8px', color: 'white', outline: 'none',
+                    fontFamily: "'Fira Code', monospace",
+                  }}
+                />
+                <button
+                  onClick={() => { if (hintInput.trim()) { onDocsHint?.(hintInput.trim()); setHintInput(''); } }}
+                  style={{
+                    fontSize: 9, padding: '3px 8px', background: 'rgba(200,168,74,0.12)',
+                    border: '1px solid rgba(200,168,74,0.35)', borderRadius: 4,
+                    color: '#c8a84a', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+                  }}>
+                  send
+                </button>
+              </div>
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -193,7 +234,7 @@ function MiniLog({
 
 function BrowserPanel({
   label, frameSrc, active, isPaused, isComplete, wsActive,
-  stuckMilestone, canSkip, dimmed, pagesScraped, onTogglePause, onSkip, onFinish, onInteraction, onGoto, onRestart,
+  stuckMilestone, canSkip, dimmed, relevantDocs, onTogglePause, onSkip, onFinish, onInteraction, onGoto, onRestart,
 }: any) {
   const [manualUrl, setManualUrl] = useState('');
 
@@ -252,12 +293,12 @@ function BrowserPanel({
                 fontFamily: "'DM Sans', sans-serif",
                 opacity: canSkip ? 1 : 0.35,
                 cursor: canSkip ? 'pointer' : 'not-allowed',
-                animation: canSkip ? 'pulseSkipHint 2s ease-in-out infinite 0.5s' : 'none',
+                animation: 'none',
               }}>
               <ArrowRight size={9} />
               skip
             </button>
-            {pagesScraped >= 30 && (
+            {relevantDocs >= 1 && (
               <button onClick={onFinish}
                 className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
                 style={{
@@ -705,6 +746,7 @@ function DashboardContent() {
           const saved = JSON.parse(raw);
           isRestoringRef.current = true;
           setIsRestoring(true);
+          setQuerySubmitted(true);
           if (saved.sessionId)     sessionIdRef.current = saved.sessionId;
           if (saved.rivaFrame)     setRivaFrame(saved.rivaFrame);
           if (saved.compFrame)     setCompFrame(saved.compFrame);
@@ -738,8 +780,14 @@ function DashboardContent() {
   const [logsExpanded,     setLogsExpanded]     = useState(true);
   const [bottomExpanded,   setBottomExpanded]   = useState(false);
   const [sessionInvalid,   setSessionInvalid]   = useState<{ side: string; reason?: string } | null>(null);
-  const [rivaPagesScraped, setRivaPagesScraped] = useState(0);
-  const [compPagesScraped, setCompPagesScraped] = useState(0);
+  const [rivaQueryPending, setRivaQueryPending] = useState(false);
+  const [compQueryPending, setCompQueryPending] = useState(false);
+  const [queryInput,       setQueryInput]       = useState('');
+  const [userQuery,        setUserQuery]        = useState('');
+  const [querySubmitted,   setQuerySubmitted]   = useState(false);
+  const [docsHitl, setDocsHitl] = useState<{ side: 'riva' | 'comp'; prompt: string } | null>(null);
+  const [rivaRelevantDocs, setRivaRelevantDocs] = useState(0);
+  const [compRelevantDocs, setCompRelevantDocs] = useState(0);
 
   // Persist UI state
   useEffect(() => {
@@ -770,32 +818,13 @@ function DashboardContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rivaUrl, compUrl]);
 
-  // Synthetic thought when a domain is already cached
-  useEffect(() => {
-    if (rivaCanSkip && !rivaComplete && !isRestoringRef.current) {
-      setRivaThoughts(p => [...p, {
-        text: 'Domain already indexed — click skip to use cached data.',
-        state: 'found', ts: now(),
-      }]);
-    }
-  }, [rivaCanSkip]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (compCanSkip && !compComplete && !isRestoringRef.current) {
-      setCompThoughts(p => [...p, {
-        text: 'Domain already indexed — click skip to use cached data.',
-        state: 'found', ts: now(),
-      }]);
-    }
-  }, [compCanSkip]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const rivaWsRef     = useRef<WebSocket | null>(null);
   const compWsRef     = useRef<WebSocket | null>(null);
   const pipelineWsRef = useRef<WebSocket | null>(null);
 
   // pipeline WebSocket, only open after storage is confirmed
   useEffect(() => {
-    if (!storageChecked) return;
+    if (!storageChecked || !querySubmitted) return;
     if (isRestoringRef.current || !sessionId || expected === 0) return;
     const ws = new WebSocket(`${WS_BASE}/ws/pipeline?session=${sessionId}&expected=${expected}`);
     pipelineWsRef.current = ws;
@@ -815,15 +844,15 @@ function DashboardContent() {
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, storageChecked]);
+  }, [sessionId, storageChecked, querySubmitted]);
 
-  // Riva browse WebSocket, only open after storage is confirmed
+  // Riva browse WebSocket, only open after storage is confirmed and query submitted
   useEffect(() => {
-    if (!storageChecked) return;
+    if (!storageChecked || !querySubmitted) return;
     if (isRestoringRef.current || !rivaUrl) { setRivaWsState('closed'); return; }
     const ws = new WebSocket(`${WS_BASE}/ws/browse?session=${sessionId}&role=riva`);
     rivaWsRef.current = ws;
-    ws.onopen    = () => { setRivaWsState('open'); ws.send(JSON.stringify({ url: rivaUrl })); };
+    ws.onopen    = () => { setRivaWsState('open'); ws.send(JSON.stringify({ url: rivaUrl, query: userQuery })); };
     ws.onclose   = () => setRivaWsState('closed');
     ws.onerror   = () => { setRivaWsState('closed'); setRivaThoughts(p => [...p, { text: 'WebSocket connection failed — is the backend running?', state: 'error', ts: now() }]); };
     ws.onmessage = (e) => {
@@ -831,9 +860,11 @@ function DashboardContent() {
       if (msg.type === 'frame')               setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
       else if (msg.type === 'thought')        setRivaThoughts(p => [...p, { ...msg, ts: now() }]);
       else if (msg.type === 'auto_pause')     setRivaPaused(true);
-      else if (msg.type === 'page_saved')     setRivaPagesScraped(p => p + 1);
       else if (msg.type === 'stuck_guidance') setRivaStuckMilestone(msg.milestone);
-      else if (msg.type === 'browse_complete') { setRivaComplete(true); setRivaStuckMilestone(null); }
+      else if (msg.type === 'query_prompt')   { setRivaQueryPending(true); setLogsExpanded(true); }
+      else if (msg.type === 'docs_hitl')      { setDocsHitl({ side: 'riva', prompt: msg.prompt }); setLogsExpanded(true); }
+      else if (msg.type === 'relevant_doc_saved') setRivaRelevantDocs(p => p + 1);
+      else if (msg.type === 'browse_complete') { setRivaComplete(true); setRivaStuckMilestone(null); setRivaQueryPending(false); setDocsHitl(d => d?.side === 'riva' ? null : d); }
       else if (msg.type === 'session_invalid') {
         setSessionInvalid({ side: 'riva' });
         setPipelineLogs([]);
@@ -842,15 +873,15 @@ function DashboardContent() {
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rivaUrl, storageChecked]);
+  }, [rivaUrl, storageChecked, querySubmitted]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // competitor browse WebSocket, only open after storage is confirmed
   useEffect(() => {
-    if (!storageChecked) return;
+    if (!storageChecked || !querySubmitted) return;
     if (isRestoringRef.current || !compUrl) { setCompWsState('closed'); return; }
     const ws = new WebSocket(`${WS_BASE}/ws/browse?session=${sessionId}&role=comp`);
     compWsRef.current = ws;
-    ws.onopen    = () => { setCompWsState('open'); ws.send(JSON.stringify({ url: compUrl })); };
+    ws.onopen    = () => { setCompWsState('open'); ws.send(JSON.stringify({ url: compUrl, query: userQuery })); };
     ws.onclose   = () => setCompWsState('closed');
     ws.onerror   = () => { setCompWsState('closed'); setCompThoughts(p => [...p, { text: 'WebSocket connection failed — is the backend running?', state: 'error', ts: now() }]); };
     ws.onmessage = (e) => {
@@ -858,9 +889,11 @@ function DashboardContent() {
       if (msg.type === 'frame')               setCompFrame(`data:image/jpeg;base64,${msg.data}`);
       else if (msg.type === 'thought')        setCompThoughts(p => [...p, { ...msg, ts: now() }]);
       else if (msg.type === 'auto_pause')     setCompPaused(true);
-      else if (msg.type === 'page_saved')     setCompPagesScraped(p => p + 1);
+      else if (msg.type === 'query_prompt')   { setCompQueryPending(true); setLogsExpanded(true); }
+      else if (msg.type === 'docs_hitl')      { setDocsHitl({ side: 'comp', prompt: msg.prompt }); setLogsExpanded(true); }
+      else if (msg.type === 'relevant_doc_saved') setCompRelevantDocs(p => p + 1);
       else if (msg.type === 'stuck_guidance') setCompStuckMilestone(msg.milestone);
-      else if (msg.type === 'browse_complete') { setCompComplete(true); setCompStuckMilestone(null); }
+      else if (msg.type === 'browse_complete') { setCompComplete(true); setCompStuckMilestone(null); setCompQueryPending(false); setDocsHitl(d => d?.side === 'comp' ? null : d); }
       else if (msg.type === 'session_invalid') {
         setSessionInvalid({ side: 'comp' });
         setPipelineLogs([]);
@@ -869,7 +902,7 @@ function DashboardContent() {
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compUrl, storageChecked]);
+  }, [compUrl, storageChecked, querySubmitted]);
 
   function sendToWs(wsRef: React.RefObject<WebSocket | null>, msg: object) {
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(msg));
@@ -891,6 +924,20 @@ function DashboardContent() {
 
   function finishBrowse(side: 'riva' | 'comp') {
     sendToWs(side === 'riva' ? rivaWsRef : compWsRef, { type: 'finish' });
+  }
+
+  function submitQuery() {
+    if (!queryInput.trim()) return;
+    setUserQuery(queryInput.trim());
+    setQuerySubmitted(true);
+    setQueryInput('');
+  }
+
+  function submitDocsHint(value: string) {
+    if (!value.trim() || !docsHitl) return;
+    const wsRef = docsHitl.side === 'riva' ? rivaWsRef : compWsRef;
+    sendToWs(wsRef, { type: 'docs_hint', value: value.trim() });
+    setDocsHitl(null);
   }
 
   function restartBrowse(url: string, side: 'riva' | 'comp') {
@@ -951,6 +998,62 @@ function DashboardContent() {
       `}</style>
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" />
 
+      {storageChecked && !querySubmitted && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 50,
+          background: 'rgba(8,6,16,0.88)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          backdropFilter: 'blur(6px)',
+        }}>
+          <div style={{
+            background: 'rgba(20,14,40,0.97)',
+            border: '1px solid rgba(110,176,232,0.25)',
+            borderRadius: 14, padding: '32px 36px', maxWidth: 480, width: '90%',
+          }}>
+            <div style={{ color: '#6dc08a', fontSize: 9, letterSpacing: '2.5px', fontWeight: 700,
+              fontFamily: "'DM Sans', sans-serif", marginBottom: 10 }}>
+              COMPETITIVE ANALYSIS
+            </div>
+            <div style={{ color: 'rgba(255,255,255,0.9)', fontSize: 16, fontWeight: 600,
+              fontFamily: "'DM Sans', sans-serif", marginBottom: 6 }}>
+              What do you want to analyze?
+            </div>
+            <div style={{ color: 'rgba(255,255,255,0.38)', fontSize: 11,
+              fontFamily: "'DM Sans', sans-serif", lineHeight: '17px', marginBottom: 22 }}>
+              The agent will collect pricing immediately, then search the documentation for your specific question.
+            </div>
+            <input
+              autoFocus
+              value={queryInput}
+              onChange={e => setQueryInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && submitQuery()}
+              placeholder="e.g. which is better for hosting large files?"
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(110,176,232,0.25)', borderRadius: 8,
+                padding: '11px 14px', color: 'white', fontSize: 13, outline: 'none',
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            />
+            <button onClick={submitQuery}
+              disabled={!queryInput.trim()}
+              style={{
+                marginTop: 12, width: '100%',
+                background: queryInput.trim() ? 'rgba(110,176,232,0.15)' : 'rgba(255,255,255,0.04)',
+                border: `1px solid ${queryInput.trim() ? 'rgba(110,176,232,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                borderRadius: 8, padding: '11px',
+                color: queryInput.trim() ? '#6eb0e8' : 'rgba(255,255,255,0.2)',
+                fontSize: 10, fontWeight: 700, letterSpacing: '1.5px',
+                fontFamily: "'DM Sans', sans-serif",
+                cursor: queryInput.trim() ? 'pointer' : 'not-allowed',
+              }}>
+              START DOCS SEARCH ↵
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Outer div — no h-screen/overflow-hidden so page expands when reports open */}
       <div className="flex flex-col text-white"
         style={{ background: 'linear-gradient(135deg, #0e0d2b 0%, #1a1040 40%, #0d0820 100%)',
@@ -1005,7 +1108,9 @@ function DashboardContent() {
                       domain={hostname(rivaUrl)}
                       eyeBgFill="#e0f7fa" eyeDarkFill="#001a2e" eyeLidFill="#1a0d40"
                       glowId="mini-log-riva" expanded={logsExpanded}
-                      onToggle={() => setLogsExpanded(v => !v)} />
+                      onToggle={() => setLogsExpanded(v => !v)}
+                      docsHitlPrompt={docsHitl?.side === 'riva' ? docsHitl.prompt : undefined}
+                      onDocsHint={(v) => submitDocsHint(v)} />
                   </div>
                 )}
                 {compUrl && (
@@ -1015,7 +1120,9 @@ function DashboardContent() {
                       domain={hostname(compUrl)}
                       eyeBgFill="#fbe9e7" eyeDarkFill="#1e0000" eyeLidFill="#200a1a"
                       glowId="mini-log-comp" expanded={logsExpanded}
-                      onToggle={() => setLogsExpanded(v => !v)} />
+                      onToggle={() => setLogsExpanded(v => !v)}
+                      docsHitlPrompt={docsHitl?.side === 'comp' ? docsHitl.prompt : undefined}
+                      onDocsHint={(v) => submitDocsHint(v)} />
                   </div>
                 )}
               </div>
@@ -1064,7 +1171,7 @@ function DashboardContent() {
                   <BrowserPanel label="riva" frameSrc={rivaFrame} active
                     isPaused={rivaPaused} isComplete={rivaComplete} wsActive={rivaWsState === 'open'}
                     stuckMilestone={rivaStuckMilestone} canSkip={rivaCanSkip} dimmed={rivaIsDimmed}
-                    pagesScraped={rivaPagesScraped}
+                    relevantDocs={rivaRelevantDocs}
                     onTogglePause={() => togglePause('riva')}
                     onSkip={() => skipBrowse('riva')}
                     onFinish={() => finishBrowse('riva')}
@@ -1085,7 +1192,7 @@ function DashboardContent() {
                   <BrowserPanel label="comp" frameSrc={compFrame} active
                     isPaused={compPaused} isComplete={compComplete} wsActive={compWsState === 'open'}
                     stuckMilestone={compStuckMilestone} canSkip={compCanSkip} dimmed={compIsDimmed}
-                    pagesScraped={compPagesScraped}
+                    relevantDocs={compRelevantDocs}
                     onTogglePause={() => togglePause('comp')}
                     onSkip={() => skipBrowse('comp')}
                     onFinish={() => finishBrowse('comp')}
