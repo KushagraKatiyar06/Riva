@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Play, Pause, ArrowRight, Download, Maximize2, Minimize2 } from 'lucide-react';
+import { Play, Pause, ArrowRight, Download, Maximize2, Minimize2, Loader2 } from 'lucide-react';
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
 const WS_BASE  = API_BASE.replace(/^http/, 'ws');
@@ -234,7 +234,9 @@ function MiniLog({
 
 function BrowserPanel({
   label, frameSrc, active, isPaused, isComplete, wsActive,
-  stuckMilestone, canSkip, dimmed, relevantDocs, onTogglePause, onSkip, onFinish, onInteraction, onGoto, onRestart,
+  stuckMilestone, canSkip, dimmed, relevantDocs, docsCheckpoint,
+  onTogglePause, onSkip, onFinish, onInteraction, onGoto, onRestart,
+  onDocsCheckpointContinue, onDocsCheckpointFinish,
 }: any) {
   const [manualUrl, setManualUrl] = useState('');
 
@@ -392,6 +394,54 @@ function BrowserPanel({
                 Navigate to the{' '}
                 <span style={{ color: '#c8a84a', fontWeight: 700 }}>{stuckMilestone}</span>{' '}
                 page yourself, copy the URL, and paste it into the highlighted bar above — the agent will take it from there.
+              </div>
+            </div>
+          </>
+        )}
+
+        {docsCheckpoint && !isComplete && (
+          <>
+            <div className="absolute inset-0 pointer-events-none"
+              style={{ background: 'rgba(0,0,0,0.52)' }} />
+            <div className="absolute bottom-0 left-0 right-0 px-4 py-4 flex flex-col gap-3"
+              style={{
+                background: 'linear-gradient(to top, rgba(0,0,0,0.98) 75%, transparent)',
+                animation: 'stuckFadeIn 0.45s cubic-bezier(0.22,1,0.36,1) both',
+              }}>
+              <div className="flex items-center gap-2">
+                <span style={{ fontSize: 13 }}>✓</span>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#6eb0e8', letterSpacing: '1.5px',
+                  fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase' }}>
+                  {docsCheckpoint.urls.length} relevant pages found
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {docsCheckpoint.urls.map((url: string, i: number) => (
+                  <div key={i} style={{ fontSize: 9, color: '#6dc08a', fontFamily: "'Fira Code', monospace",
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    • {url.replace(/^https?:\/\//, '')}
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)', lineHeight: '15px',
+                fontFamily: "'DM Sans', sans-serif" }}>
+                Stop here with what&apos;s collected, or keep searching for more relevant pages.
+              </div>
+              <div className="flex gap-2">
+                <button onClick={onDocsCheckpointFinish}
+                  className="flex-1 py-1.5 rounded transition-all"
+                  style={{ background: 'rgba(109,192,138,0.12)', border: '1px solid rgba(109,192,138,0.4)',
+                    color: '#6dc08a', fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
+                    fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
+                  ✓ done for now
+                </button>
+                <button onClick={onDocsCheckpointContinue}
+                  className="flex-1 py-1.5 rounded transition-all"
+                  style={{ background: 'rgba(110,176,232,0.12)', border: '1px solid rgba(110,176,232,0.4)',
+                    color: '#6eb0e8', fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
+                    fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
+                  keep searching →
+                </button>
               </div>
             </div>
           </>
@@ -719,8 +769,10 @@ function DashboardContent() {
     ? `riva-session:${runId}`
     : `riva-session:${rivaUrl}|${compUrl}`;
 
-  const sessionIdRef    = useRef(crypto.randomUUID());
-  const isRestoringRef  = useRef(false);
+  const sessionIdRef      = useRef(crypto.randomUUID());
+  const isRestoringRef    = useRef(false);
+  const autoSubmittedRef  = useRef(false);
+  const pdfRef            = useRef<HTMLDivElement>(null);
   // storageChecked gates WS connections so we don't connect before knowing if we're restoring
   const [storageChecked, setStorageChecked] = useState(false);
 
@@ -785,7 +837,10 @@ function DashboardContent() {
   const [queryInput,       setQueryInput]       = useState('');
   const [userQuery,        setUserQuery]        = useState('');
   const [querySubmitted,   setQuerySubmitted]   = useState(false);
-  const [docsHitl, setDocsHitl] = useState<{ side: 'riva' | 'comp'; prompt: string } | null>(null);
+  const [rivaDocsHitl,       setRivaDocsHitl]       = useState<string | null>(null);
+  const [compDocsHitl,       setCompDocsHitl]       = useState<string | null>(null);
+  const [rivaDocsCheckpoint, setRivaDocsCheckpoint] = useState<string[] | null>(null);
+  const [compDocsCheckpoint, setCompDocsCheckpoint] = useState<string[] | null>(null);
   const [rivaRelevantDocs, setRivaRelevantDocs] = useState(0);
   const [compRelevantDocs, setCompRelevantDocs] = useState(0);
 
@@ -862,9 +917,10 @@ function DashboardContent() {
       else if (msg.type === 'auto_pause')     setRivaPaused(true);
       else if (msg.type === 'stuck_guidance') setRivaStuckMilestone(msg.milestone);
       else if (msg.type === 'query_prompt')   { setRivaQueryPending(true); setLogsExpanded(true); }
-      else if (msg.type === 'docs_hitl')      { setDocsHitl({ side: 'riva', prompt: msg.prompt }); setLogsExpanded(true); }
+      else if (msg.type === 'docs_hitl')       { setRivaDocsHitl(msg.prompt); setLogsExpanded(true); }
+      else if (msg.type === 'docs_checkpoint') { setRivaDocsCheckpoint(msg.urls); setRivaPaused(true); }
       else if (msg.type === 'relevant_doc_saved') setRivaRelevantDocs(p => p + 1);
-      else if (msg.type === 'browse_complete') { setRivaComplete(true); setRivaStuckMilestone(null); setRivaQueryPending(false); setDocsHitl(d => d?.side === 'riva' ? null : d); }
+      else if (msg.type === 'browse_complete') { setRivaComplete(true); setRivaStuckMilestone(null); setRivaQueryPending(false); setRivaDocsHitl(null); setRivaDocsCheckpoint(null); }
       else if (msg.type === 'session_invalid') {
         setSessionInvalid({ side: 'riva' });
         setPipelineLogs([]);
@@ -890,10 +946,11 @@ function DashboardContent() {
       else if (msg.type === 'thought')        setCompThoughts(p => [...p, { ...msg, ts: now() }]);
       else if (msg.type === 'auto_pause')     setCompPaused(true);
       else if (msg.type === 'query_prompt')   { setCompQueryPending(true); setLogsExpanded(true); }
-      else if (msg.type === 'docs_hitl')      { setDocsHitl({ side: 'comp', prompt: msg.prompt }); setLogsExpanded(true); }
+      else if (msg.type === 'docs_hitl')       { setCompDocsHitl(msg.prompt); setLogsExpanded(true); }
+      else if (msg.type === 'docs_checkpoint') { setCompDocsCheckpoint(msg.urls); setCompPaused(true); }
       else if (msg.type === 'relevant_doc_saved') setCompRelevantDocs(p => p + 1);
       else if (msg.type === 'stuck_guidance') setCompStuckMilestone(msg.milestone);
-      else if (msg.type === 'browse_complete') { setCompComplete(true); setCompStuckMilestone(null); setCompQueryPending(false); setDocsHitl(d => d?.side === 'comp' ? null : d); }
+      else if (msg.type === 'browse_complete') { setCompComplete(true); setCompStuckMilestone(null); setCompQueryPending(false); setCompDocsHitl(null); setCompDocsCheckpoint(null); }
       else if (msg.type === 'session_invalid') {
         setSessionInvalid({ side: 'comp' });
         setPipelineLogs([]);
@@ -933,11 +990,22 @@ function DashboardContent() {
     setQueryInput('');
   }
 
-  function submitDocsHint(value: string) {
-    if (!value.trim() || !docsHitl) return;
-    const wsRef = docsHitl.side === 'riva' ? rivaWsRef : compWsRef;
-    sendToWs(wsRef, { type: 'docs_hint', value: value.trim() });
-    setDocsHitl(null);
+  function submitDocsHint(side: 'riva' | 'comp', value: string) {
+    if (!value.trim()) return;
+    sendToWs(side === 'riva' ? rivaWsRef : compWsRef, { type: 'docs_hint', value: value.trim() });
+    if (side === 'riva') setRivaDocsHitl(null); else setCompDocsHitl(null);
+  }
+
+  function docsCheckpointContinue(side: 'riva' | 'comp') {
+    sendToWs(side === 'riva' ? rivaWsRef : compWsRef, { type: 'resume' });
+    if (side === 'riva') { setRivaPaused(false); setRivaDocsCheckpoint(null); }
+    else                 { setCompPaused(false);  setCompDocsCheckpoint(null); }
+  }
+
+  function docsCheckpointFinish(side: 'riva' | 'comp') {
+    sendToWs(side === 'riva' ? rivaWsRef : compWsRef, { type: 'finish' });
+    if (side === 'riva') setRivaDocsCheckpoint(null);
+    else                 setCompDocsCheckpoint(null);
   }
 
   function restartBrowse(url: string, side: 'riva' | 'comp') {
@@ -963,6 +1031,22 @@ function DashboardContent() {
     };
   }
 
+  // Auto-generate report with the initial query as focus once data is ready
+  useEffect(() => {
+    if (pipelineStatus === 'ready' && userQuery && !reportGenerating && !autoSubmittedRef.current) {
+      autoSubmittedRef.current = true;
+      submitFocus(userQuery);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipelineStatus]);
+
+  // Scroll to PDF section when first report arrives
+  useEffect(() => {
+    if (reports.length === 1) {
+      setTimeout(() => pdfRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+    }
+  }, [reports.length]);
+
   function submitFocus(focus: string) {
     setReportGenerating(true);
     sendToWs(pipelineWsRef, { type: 'focus', text: focus });
@@ -972,8 +1056,9 @@ function DashboardContent() {
     try { return new URL(url).hostname; } catch { return url; }
   }
 
-  const RIVA_COLOR = 'rgba(77,184,255,0.55)';
-  const COMP_COLOR = 'rgba(255,107,107,0.55)';
+  const pipelineActive = pipelineStatus === 'vectorizing' || reportGenerating;
+  const RIVA_COLOR = pipelineActive ? 'rgba(77,184,255,0.2)'  : 'rgba(77,184,255,0.55)';
+  const COMP_COLOR = pipelineActive ? 'rgba(255,107,107,0.2)' : 'rgba(255,107,107,0.55)';
 
   const rivaIsStuck  = rivaStuckMilestone !== null && !rivaComplete;
   const compIsStuck  = compStuckMilestone !== null && !compComplete;
@@ -994,6 +1079,14 @@ function DashboardContent() {
         @keyframes stuckFadeIn {
           0%   { opacity: 0; transform: translateY(12px); }
           100% { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+        @keyframes pipelineGlow {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(149,128,200,0.4); }
+          50%       { box-shadow: 0 0 8px 2px rgba(149,128,200,0.15); }
         }
       `}</style>
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" />
@@ -1096,11 +1189,12 @@ function DashboardContent() {
           </header>
         </div>
 
-        <div className="px-3 flex flex-col">
-          <div className="flex flex-col shrink-0" style={{ height: 'calc(100vh - 88px)' }}>
+        <div className="px-3 flex flex-col" style={{ height: 'calc(100vh - 72px)' }}>
 
-            {(rivaUrl || compUrl) && (
-              <div className="flex gap-2 shrink-0 pt-2 pb-1.5">
+          {/* ── logs row ── */}
+          {(rivaUrl || compUrl) && (
+            <div className="shrink-0 pt-2 pb-1" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div className="flex gap-2">
                 {rivaUrl && (
                   <div className="flex-1 min-w-0 rounded-lg overflow-hidden"
                     style={{ border: `1.5px solid ${RIVA_COLOR}` }}>
@@ -1109,8 +1203,8 @@ function DashboardContent() {
                       eyeBgFill="#e0f7fa" eyeDarkFill="#001a2e" eyeLidFill="#1a0d40"
                       glowId="mini-log-riva" expanded={logsExpanded}
                       onToggle={() => setLogsExpanded(v => !v)}
-                      docsHitlPrompt={docsHitl?.side === 'riva' ? docsHitl.prompt : undefined}
-                      onDocsHint={(v) => submitDocsHint(v)} />
+                      docsHitlPrompt={rivaDocsHitl ?? undefined}
+                      onDocsHint={(v) => submitDocsHint('riva', v)} />
                   </div>
                 )}
                 {compUrl && (
@@ -1121,113 +1215,225 @@ function DashboardContent() {
                       eyeBgFill="#fbe9e7" eyeDarkFill="#1e0000" eyeLidFill="#200a1a"
                       glowId="mini-log-comp" expanded={logsExpanded}
                       onToggle={() => setLogsExpanded(v => !v)}
-                      docsHitlPrompt={docsHitl?.side === 'comp' ? docsHitl.prompt : undefined}
-                      onDocsHint={(v) => submitDocsHint(v)} />
+                      docsHitlPrompt={compDocsHitl ?? undefined}
+                      onDocsHint={(v) => submitDocsHint('comp', v)} />
                   </div>
                 )}
               </div>
-            )}
 
-            {/* Session invalid banner */}
-            {sessionInvalid && (
-              <div className="shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-lg mb-1"
-                style={{
-                  background: 'rgba(212,96,96,0.1)',
-                  border: '1px solid rgba(212,96,96,0.4)',
-                  animation: 'stuckFadeIn 0.4s cubic-bezier(0.22,1,0.36,1) both',
-                }}>
-                <span style={{ fontSize: 14 }}>✕</span>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#e87070',
-                    letterSpacing: '1px', fontFamily: "'DM Sans', sans-serif" }}>
-                    Invalid URL — session stopped
+              {/* pipeline status strip */}
+              {(() => {
+                const isActive = pipelineStatus === 'vectorizing' || reportGenerating;
+                const recentLogs = pipelineLogs.slice(-4);
+                if (pipelineLogs.length === 0) return null;
+                return (
+                  <div className="px-3 py-2 rounded-md"
+                    style={{
+                      background: isActive ? 'rgba(149,128,200,0.07)' : 'rgba(0,0,0,0.25)',
+                      border: isActive
+                        ? '1px solid rgba(149,128,200,0.35)'
+                        : '1px solid rgba(255,255,255,0.06)',
+                      animation: isActive ? 'pipelineGlow 2s ease-in-out infinite' : 'none',
+                      transition: 'background 0.4s ease, border-color 0.4s ease',
+                    }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      {isActive ? (
+                        <Loader2 size={10} style={{ color: '#9580c8', flexShrink: 0,
+                          animation: 'spin 1s linear infinite' }} />
+                      ) : (
+                        <span style={{ fontSize: 9, color: '#6dc08a', flexShrink: 0 }}>✓</span>
+                      )}
+                      <span style={{
+                        fontSize: 8, fontWeight: 700, letterSpacing: '2px', flexShrink: 0,
+                        color: isActive ? '#b8a0e8' : '#6dc08a',
+                        fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase',
+                      }}>
+                        {reportGenerating ? 'generating report' : pipelineStatus === 'vectorizing' ? 'indexing' : 'indexed'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      {recentLogs.map((l, i) => {
+                        const isMostRecent = i === recentLogs.length - 1;
+                        return (
+                          <div key={i} style={{
+                            fontSize: 9, fontFamily: "'Fira Code', monospace",
+                            color: isMostRecent
+                              ? (isActive ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.5)')
+                              : 'rgba(255,255,255,0.2)',
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                            transition: 'color 0.3s ease',
+                          }}>
+                            {l.text}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)',
-                    fontFamily: "'DM Sans', sans-serif", marginTop: 2 }}>
-                    The {sessionInvalid.side} URL doesn&apos;t appear to be a software product with pricing and documentation.
-                    Go back and try a different URL (e.g. stripe.com, vercel.com).
-                  </div>
-                </div>
-                <button onClick={() => { try { sessionStorage.removeItem(storageKey); } catch {} router.push('/'); }}
-                  className="ml-auto px-3 py-1 rounded-full shrink-0 transition-all"
-                  style={{ background: 'rgba(212,96,96,0.15)', color: '#e87070',
-                    border: '1px solid rgba(212,96,96,0.4)', fontSize: 9, fontWeight: 600,
-                    letterSpacing: '1.5px', fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
-                  ← go back
-                </button>
-              </div>
-            )}
-
-            <div className="flex-1 flex flex-col md:flex-row min-h-0 gap-2 pb-2">
-              {rivaUrl && (
-                <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
-                  style={{
-                    border: rivaIsStuck
-                      ? '1.5px solid rgba(200,168,74,0.8)'
-                      : `1.5px solid ${RIVA_COLOR}`,
-                    animation: rivaIsStuck ? 'pulseStuckBorder 1.8s ease-in-out infinite' : 'none',
-                    transition: 'border-color 0.3s ease',
-                  }}>
-                  <BrowserPanel label="riva" frameSrc={rivaFrame} active
-                    isPaused={rivaPaused} isComplete={rivaComplete} wsActive={rivaWsState === 'open'}
-                    stuckMilestone={rivaStuckMilestone} canSkip={rivaCanSkip} dimmed={rivaIsDimmed}
-                    relevantDocs={rivaRelevantDocs}
-                    onTogglePause={() => togglePause('riva')}
-                    onSkip={() => skipBrowse('riva')}
-                    onFinish={() => finishBrowse('riva')}
-                    onInteraction={(t: string, x: number, y: number) => sendToWs(rivaWsRef, { type: t, x, y })}
-                    onGoto={(url: string) => { setRivaStuckMilestone(null); sendToWs(rivaWsRef, { type: 'goto', url }); }}
-                    onRestart={(url: string) => restartBrowse(url, 'riva')} />
-                </div>
-              )}
-              {compUrl && (
-                <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
-                  style={{
-                    border: compIsStuck
-                      ? '1.5px solid rgba(200,168,74,0.8)'
-                      : `1.5px solid ${COMP_COLOR}`,
-                    animation: compIsStuck ? 'pulseStuckBorder 1.8s ease-in-out infinite' : 'none',
-                    transition: 'border-color 0.3s ease',
-                  }}>
-                  <BrowserPanel label="comp" frameSrc={compFrame} active
-                    isPaused={compPaused} isComplete={compComplete} wsActive={compWsState === 'open'}
-                    stuckMilestone={compStuckMilestone} canSkip={compCanSkip} dimmed={compIsDimmed}
-                    relevantDocs={compRelevantDocs}
-                    onTogglePause={() => togglePause('comp')}
-                    onSkip={() => skipBrowse('comp')}
-                    onFinish={() => finishBrowse('comp')}
-                    onInteraction={(t: string, x: number, y: number) => sendToWs(compWsRef, { type: t, x, y })}
-                    onGoto={(url: string) => { setCompStuckMilestone(null); sendToWs(compWsRef, { type: 'goto', url }); }}
-                    onRestart={(url: string) => restartBrowse(url, 'comp')} />
-                </div>
-              )}
+                );
+              })()}
             </div>
+          )}
 
-            <div className="flex flex-col sm:flex-row shrink-0 rounded-lg overflow-hidden mb-3"
+          {/* session invalid banner */}
+          {sessionInvalid && (
+            <div className="shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-lg mb-1"
               style={{
-                height: bottomExpanded ? 400 : 240,
-                transition: 'height 0.25s ease',
-                border: '1px solid rgba(255,255,255,0.1)',
+                background: 'rgba(212,96,96,0.1)',
+                border: '1px solid rgba(212,96,96,0.4)',
+                animation: 'stuckFadeIn 0.4s cubic-bezier(0.22,1,0.36,1) both',
               }}>
-              <div className="flex-1 min-w-0">
-                <InferenceLogPanel logs={pipelineLogs} status={pipelineStatus}
-                  hasReports={reports.length > 0}
-                  bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
+              <span style={{ fontSize: 14 }}>✕</span>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#e87070',
+                  letterSpacing: '1px', fontFamily: "'DM Sans', sans-serif" }}>
+                  Invalid URL — session stopped
+                </div>
+                <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)',
+                  fontFamily: "'DM Sans', sans-serif", marginTop: 2 }}>
+                  The {sessionInvalid.side} URL doesn&apos;t appear to be a software product with pricing and documentation.
+                  Go back and try a different URL (e.g. stripe.com, vercel.com).
+                </div>
               </div>
-              <div className="flex-1 min-w-0" style={{ borderLeft: '1px solid rgba(255,255,255,0.06)' }}>
-                <FocusPanel
-                  onSubmit={submitFocus}
-                  pipelineStatus={pipelineStatus}
-                  reportGenerating={reportGenerating}
-                  bottomExpanded={bottomExpanded}
-                  onToggleBottom={() => setBottomExpanded(v => !v)}
-                  sessionInvalid={!!sessionInvalid} />
+              <button onClick={() => { try { sessionStorage.removeItem(storageKey); } catch {} router.push('/'); }}
+                className="ml-auto px-3 py-1 rounded-full shrink-0 transition-all"
+                style={{ background: 'rgba(212,96,96,0.15)', color: '#e87070',
+                  border: '1px solid rgba(212,96,96,0.4)', fontSize: 9, fontWeight: 600,
+                  letterSpacing: '1.5px', fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
+                ← go back
+              </button>
+            </div>
+          )}
+
+          {/* ── browser panels ── */}
+          <div className="flex-1 flex flex-col md:flex-row min-h-0 gap-2 pb-2">
+            {rivaUrl && (
+              <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
+                style={{
+                  border: rivaIsStuck ? '1.5px solid rgba(200,168,74,0.8)' : `1.5px solid ${RIVA_COLOR}`,
+                  animation: rivaIsStuck ? 'pulseStuckBorder 1.8s ease-in-out infinite' : 'none',
+                  transition: 'border-color 0.3s ease',
+                }}>
+                <BrowserPanel label="riva" frameSrc={rivaFrame} active
+                  isPaused={rivaPaused} isComplete={rivaComplete} wsActive={rivaWsState === 'open'}
+                  stuckMilestone={rivaStuckMilestone} canSkip={rivaCanSkip} dimmed={rivaIsDimmed}
+                  relevantDocs={rivaRelevantDocs}
+                  docsCheckpoint={rivaDocsCheckpoint ? { urls: rivaDocsCheckpoint } : null}
+                  onTogglePause={() => togglePause('riva')}
+                  onSkip={() => skipBrowse('riva')}
+                  onFinish={() => finishBrowse('riva')}
+                  onInteraction={(t: string, x: number, y: number) => sendToWs(rivaWsRef, { type: t, x, y })}
+                  onGoto={(url: string) => { setRivaStuckMilestone(null); sendToWs(rivaWsRef, { type: 'goto', url }); }}
+                  onRestart={(url: string) => restartBrowse(url, 'riva')}
+                  onDocsCheckpointContinue={() => docsCheckpointContinue('riva')}
+                  onDocsCheckpointFinish={() => docsCheckpointFinish('riva')} />
               </div>
+            )}
+            {compUrl && (
+              <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
+                style={{
+                  border: compIsStuck ? '1.5px solid rgba(200,168,74,0.8)' : `1.5px solid ${COMP_COLOR}`,
+                  animation: compIsStuck ? 'pulseStuckBorder 1.8s ease-in-out infinite' : 'none',
+                  transition: 'border-color 0.3s ease',
+                }}>
+                <BrowserPanel label="comp" frameSrc={compFrame} active
+                  isPaused={compPaused} isComplete={compComplete} wsActive={compWsState === 'open'}
+                  stuckMilestone={compStuckMilestone} canSkip={compCanSkip} dimmed={compIsDimmed}
+                  relevantDocs={compRelevantDocs}
+                  docsCheckpoint={compDocsCheckpoint ? { urls: compDocsCheckpoint } : null}
+                  onTogglePause={() => togglePause('comp')}
+                  onSkip={() => skipBrowse('comp')}
+                  onFinish={() => finishBrowse('comp')}
+                  onInteraction={(t: string, x: number, y: number) => sendToWs(compWsRef, { type: t, x, y })}
+                  onGoto={(url: string) => { setCompStuckMilestone(null); sendToWs(compWsRef, { type: 'goto', url }); }}
+                  onRestart={(url: string) => restartBrowse(url, 'comp')}
+                  onDocsCheckpointContinue={() => docsCheckpointContinue('comp')}
+                  onDocsCheckpointFinish={() => docsCheckpointFinish('comp')} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── PDF section (below viewport, user scrolls to it) ── */}
+        {(reportGenerating || reports.length > 0) && (
+          <div ref={pdfRef} className="px-3 pb-6 pt-2">
+            <div className="rounded-xl overflow-hidden mx-auto"
+              style={{ border: '1px solid rgba(149,128,200,0.2)', background: '#0a0820', maxWidth: '56rem' }}>
+              {/* header */}
+              <div className="flex items-center justify-between px-4 py-2.5"
+                style={{ background: 'rgba(0,0,0,0.3)', borderBottom: '1px solid rgba(149,128,200,0.1)' }}>
+                <div className="flex items-center gap-3">
+                  <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#9580c8',
+                    fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase' }}>
+                    Report
+                  </span>
+                  {reportGenerating && (
+                    <div className="flex items-center gap-2">
+                      <Loader2 size={10} style={{ color: '#c8a84a', animation: 'spin 1s linear infinite' }} />
+                      <span style={{ fontSize: 9, color: '#c8a84a', fontFamily: "'Fira Code', monospace" }}>
+                        {pipelineLogs[pipelineLogs.length - 1]?.text || 'generating...'}
+                      </span>
+                    </div>
+                  )}
+                  {!reportGenerating && reports.length > 0 && (
+                    <span style={{ fontSize: 9, color: '#6dc08a', fontFamily: "'Fira Code', monospace" }}>
+                      ✓ ready
+                    </span>
+                  )}
+                </div>
+                {reports.length > 0 && (
+                  <button onClick={() => downloadBlob(`${API_BASE}${reports[0].url}`, reports[0].filename)}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded transition-all"
+                    style={{ background: 'rgba(109,192,138,0.08)', color: '#6dc08a',
+                      border: '1px solid rgba(109,192,138,0.2)', fontSize: 8,
+                      fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
+                    <Download size={8} /> download
+                  </button>
+                )}
+              </div>
+
+              {/* PDF view — sized to one full page */}
+              {reports.map((r, i) => {
+                const previewUrl = `${API_BASE}${r.previewUrl}`;
+                return (
+                  <div key={i} style={{ position: 'relative' }}>
+                    <iframe
+                      src={previewUrl}
+                      title="report"
+                      style={{
+                        width: '100%',
+                        /* A4 ratio at container width — shows exactly one full page */
+                        height: 'min(calc(56rem * 1.414), 90vh)',
+                        border: 'none',
+                        display: 'block',
+                        background: 'white',
+                      }}
+                    />
+                    <button
+                      onClick={() => window.open(previewUrl, '_blank')}
+                      style={{
+                        position: 'absolute', top: 10, right: 10,
+                        background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.15)',
+                        borderRadius: 6, padding: '4px 8px', cursor: 'pointer',
+                        color: 'rgba(255,255,255,0.6)', fontSize: 9,
+                        fontFamily: "'DM Sans', sans-serif", letterSpacing: '1px',
+                      }}>
+                      ⤢ fullscreen
+                    </button>
+                  </div>
+                );
+              })}
+
+              {reportGenerating && reports.length === 0 && (
+                <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)',
+                    fontFamily: "'Fira Code', monospace", letterSpacing: '2px' }}>
+                    building report...
+                  </span>
+                </div>
+              )}
             </div>
           </div>
-
-          {reports.length > 0 && <ReportPreviewSection reports={reports} />}
-        </div>
+        )}
       </div>
     </>
   );

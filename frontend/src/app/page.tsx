@@ -56,82 +56,6 @@ async function downloadBlob(href: string, filename: string) {
   URL.revokeObjectURL(a.href);
 }
 
-function SiteTypePopup({ onClose, onConfirm }: { onClose: () => void; onConfirm?: () => void }) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }}
-      onClick={onClose}
-    >
-      <div
-        className="relative max-w-lg w-full rounded-2xl p-7"
-        style={{
-          background: 'linear-gradient(135deg, #0d0820 0%, #110d2a 100%)',
-          border: '1px solid rgba(160,100,255,0.35)',
-          boxShadow: '0 0 60px rgba(160,100,255,0.15)',
-        }}
-        onClick={e => e.stopPropagation()}
-      >
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 opacity-40 hover:opacity-80 transition-opacity"
-          style={{ color: '#c8aaff' }}
-        >
-          <X size={16} />
-        </button>
-
-        <p className="text-xs font-bold tracking-[4px] uppercase mb-2" style={{ color: '#a064ff' }}>
-          Before you start
-        </p>
-
-        <div className="rounded-xl px-4 py-3 mb-5" style={{ background: 'rgba(160,100,255,0.07)', border: '1px solid rgba(160,100,255,0.25)' }}>
-          <p className="text-xs font-bold mb-1" style={{ color: '#c8aaff' }}>Both sites must be:</p>
-          <ul className="text-xs space-y-1" style={{ color: 'rgba(200,170,255,0.7)' }}>
-            <li>✦ <strong style={{ color: '#c8aaff' }}>Tech / B2B SaaS</strong> products</li>
-            <li>✦ Have a <strong style={{ color: '#c8aaff' }}>public pricing page</strong></li>
-            <li>✦ Have <strong style={{ color: '#c8aaff' }}>public documentation</strong></li>
-          </ul>
-        </div>
-
-        <div className="flex gap-3 mb-5">
-          <div className="flex-1 rounded-xl p-4" style={{ background: 'rgba(109,192,138,0.08)', border: '1px solid rgba(109,192,138,0.25)' }}>
-            <p className="text-[10px] font-bold tracking-[3px] uppercase mb-2" style={{ color: '#6dc08a' }}>Works great</p>
-            <p className="text-xs font-bold mb-1" style={{ color: '#c8aaff' }}>vercel.com vs railway.app</p>
-            <ul className="text-xs space-y-1" style={{ color: 'rgba(200,170,255,0.6)' }}>
-              <li>✓ Clear pricing tiers</li>
-              <li>✓ Public documentation</li>
-              <li>✓ Feature comparison pages</li>
-              <li>✓ Developer-focused copy</li>
-            </ul>
-          </div>
-
-          <div className="flex-1 rounded-xl p-4" style={{ background: 'rgba(212,96,96,0.08)', border: '1px solid rgba(212,96,96,0.25)' }}>
-            <p className="text-[10px] font-bold tracking-[3px] uppercase mb-2" style={{ color: '#d46060' }}>Doesn&apos;t work</p>
-            <ul className="text-xs space-y-1" style={{ color: 'rgba(200,170,255,0.6)' }}>
-              <li>✗ E-commerce / retail</li>
-              <li>✗ News or media sites</li>
-              <li>✗ No public pricing page</li>
-              <li>✗ Login-gated products</li>
-            </ul>
-          </div>
-        </div>
-
-        <button
-          onClick={onConfirm ?? onClose}
-          className="w-full py-2.5 rounded-lg text-xs font-bold tracking-[4px] uppercase transition-all"
-          style={{
-            background: onConfirm ? 'rgba(160,100,255,0.2)' : 'rgba(160,100,255,0.12)',
-            border: '1px solid rgba(160,100,255,0.4)',
-            color: '#c8aaff',
-          }}
-        >
-          {onConfirm ? 'Got it — start analysis' : 'Got it'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 type ClearPreview = {
   domains:       { domain: string; files: number; vectors: number }[];
   total_vectors: number;
@@ -729,7 +653,6 @@ export default function Home() {
   const [rivaUrl, setRivaUrl] = useState('');
   const [compUrl, setCompUrl] = useState('');
   const [activeTab, setActiveTab]   = useState<'new' | 'history'>('new');
-  const [showPopup, setShowPopup]   = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [adminPw, setAdminPw] = useState('');
   const [runsUsed, setRunsUsed]     = useState(0);
@@ -839,11 +762,10 @@ export default function Home() {
     e.preventDefault();
     if (!rivaUrl.trim() && !compUrl.trim()) return;
     if (!isAdmin && runsUsed >= DAILY_LIMIT) return;
-    setShowPopup(true);
+    doSubmit();
   }
 
   async function doSubmit() {
-    setShowPopup(false);
     setSubmitLoading(true);
     let runId = crypto.randomUUID();
     try {
@@ -879,7 +801,6 @@ export default function Home() {
 
   return (
     <main className="text-white" style={{ fontFamily: "'Inter', -apple-system, sans-serif" }}>
-      {showPopup && <SiteTypePopup onClose={() => setShowPopup(false)} onConfirm={doSubmit} />}
       {showAdminModal && (
         <AdminModal
           onClose={() => setShowAdminModal(false)}
@@ -988,9 +909,44 @@ export default function Home() {
 
         {activeTab === 'new' && (
           <div className="w-full max-w-3xl">
-            <p className="text-sm mb-10" style={{ color: 'rgba(200,170,255,0.35)', letterSpacing: '1px' }}>
+            <p className="text-sm mb-8" style={{ color: 'rgba(200,170,255,0.35)', letterSpacing: '1px' }}>
               Paste two product website links and get autonomous competitive analysis reports and a GTM strategy.
             </p>
+
+            {/* Inline requirements — no popup */}
+            <div className="mb-8 rounded-xl p-4" style={{ background: 'rgba(160,100,255,0.05)', border: '1px solid rgba(160,100,255,0.15)' }}>
+              <p className="text-[10px] font-bold tracking-[3px] uppercase mb-3" style={{ color: 'rgba(200,170,255,0.4)' }}>
+                Before you start
+              </p>
+              <div className="rounded-lg px-3 py-2.5 mb-3" style={{ background: 'rgba(160,100,255,0.07)', border: '1px solid rgba(160,100,255,0.18)' }}>
+                <p className="text-[10px] font-bold mb-1" style={{ color: 'rgba(200,170,255,0.55)' }}>Both sites must be:</p>
+                <ul className="text-[10px] space-y-0.5" style={{ color: 'rgba(200,170,255,0.45)' }}>
+                  <li>✦ <strong style={{ color: 'rgba(200,170,255,0.65)' }}>Tech / B2B SaaS</strong> products</li>
+                  <li>✦ Have a <strong style={{ color: 'rgba(200,170,255,0.65)' }}>public pricing page</strong></li>
+                  <li>✦ Have <strong style={{ color: 'rgba(200,170,255,0.65)' }}>public documentation</strong></li>
+                </ul>
+              </div>
+              <div className="flex gap-3">
+                <div className="flex-1 rounded-lg px-3 py-2.5" style={{ background: 'rgba(109,192,138,0.06)', border: '1px solid rgba(109,192,138,0.18)' }}>
+                  <p className="text-[9px] font-bold tracking-[2px] uppercase mb-1.5" style={{ color: '#6dc08a' }}>Works great</p>
+                  <p className="text-[10px] font-bold mb-1" style={{ color: 'rgba(200,170,255,0.5)' }}>vercel.com vs railway.app</p>
+                  <ul className="text-[10px] space-y-0.5" style={{ color: 'rgba(200,170,255,0.35)' }}>
+                    <li>✓ Clear pricing tiers</li>
+                    <li>✓ Public documentation</li>
+                    <li>✓ Feature comparison pages</li>
+                  </ul>
+                </div>
+                <div className="flex-1 rounded-lg px-3 py-2.5" style={{ background: 'rgba(212,96,96,0.06)', border: '1px solid rgba(212,96,96,0.18)' }}>
+                  <p className="text-[9px] font-bold tracking-[2px] uppercase mb-1.5" style={{ color: '#d46060' }}>Doesn&apos;t work</p>
+                  <ul className="text-[10px] space-y-0.5" style={{ color: 'rgba(200,170,255,0.35)' }}>
+                    <li>✗ E-commerce / retail</li>
+                    <li>✗ News or media sites</li>
+                    <li>✗ No public pricing page</li>
+                    <li>✗ Login-gated products</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               <div className="flex flex-col sm:flex-row gap-4">
@@ -1063,7 +1019,7 @@ export default function Home() {
                 <div className="flex flex-col items-center gap-2 mt-3">
                   <div className="flex items-center gap-2">
                     <span className="text-[11px]" style={{ color: 'rgba(200,170,255,0.45)', letterSpacing: '0.5px' }}>
-                      {runsUsed} / {DAILY_LIMIT} runs today
+                      {runsUsed} / {DAILY_LIMIT}
                     </span>
                     {atLimit && (
                       <span className="text-[10px] font-bold tracking-[2px] uppercase" style={{ color: '#d46060' }}>
