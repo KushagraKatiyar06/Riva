@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Play, Pause, ArrowRight, Download, Maximize2, Minimize2 } from 'lucide-react';
+import { Play, Pause, ArrowRight, Download, Maximize2, Minimize2, Loader2 } from 'lucide-react';
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
 const WS_BASE  = API_BASE.replace(/^http/, 'ws');
@@ -141,13 +141,15 @@ function SmallEye({ color, bgFill, darkFill, lidFill, glowId, size = 44, agentSt
 
 function MiniLog({
   thoughts, color, accentColor, domain, eyeBgFill, eyeDarkFill, eyeLidFill, glowId,
-  expanded, onToggle,
+  expanded, onToggle, docsHitlPrompt, onDocsHint,
 }: {
   thoughts: Thought[]; color: string; accentColor: string; domain: string;
   eyeBgFill: string; eyeDarkFill: string; eyeLidFill: string; glowId: string;
   expanded: boolean; onToggle: () => void;
+  docsHitlPrompt?: string; onDocsHint?: (value: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [hintInput, setHintInput] = useState('');
   useEffect(() => {
     if (expanded && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [thoughts, expanded]);
@@ -157,7 +159,7 @@ function MiniLog({
 
   return (
     <div className="shrink-0 overflow-hidden"
-      style={{ height: expanded ? 200 : 54, transition: 'height 0.25s ease', background: 'rgba(0,0,0,0.28)' }}>
+      style={{ height: expanded ? (docsHitlPrompt ? 270 : 200) : 54, transition: 'height 0.25s ease', background: 'rgba(0,0,0,0.28)' }}>
       <div className="flex items-center justify-between px-2.5 shrink-0"
         style={{ height: 54, background: 'rgba(0,0,0,0.22)', borderBottom: expanded ? `1px solid ${accentColor}22` : 'none' }}>
         <div className="flex items-center gap-3">
@@ -176,16 +178,55 @@ function MiniLog({
         </button>
       </div>
       {expanded && (
-        <div ref={scrollRef} className="overflow-y-auto px-3 py-2 space-y-0.5"
-          style={{ height: 146, fontFamily: "'Fira Code', monospace" }}>
-          {thoughts.length === 0 && <div style={{ fontSize: 10, color: '#3a3a4e' }}>waiting...</div>}
-          {thoughts.map((t, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, fontSize: 10, lineHeight: '19px' }}>
-              <span style={{ flexShrink: 0, color: 'rgba(255,255,255,0.13)' }}>[{t.ts}]</span>
-              <span style={{ color: STATE_COLORS[t.state] ?? '#9a9ab0' }}>{t.text}</span>
+        <>
+          <div ref={scrollRef} className="overflow-y-auto px-3 py-2 space-y-0.5"
+            style={{ height: 146, fontFamily: "'Fira Code', monospace" }}>
+            {thoughts.length === 0 && <div style={{ fontSize: 10, color: '#3a3a4e' }}>waiting...</div>}
+            {thoughts.map((t, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 10, lineHeight: '19px' }}>
+                <span style={{ flexShrink: 0, color: 'rgba(255,255,255,0.13)' }}>[{t.ts}]</span>
+                <span style={{ color: STATE_COLORS[t.state] ?? '#9a9ab0' }}>{t.text}</span>
+              </div>
+            ))}
+          </div>
+          {docsHitlPrompt && (
+            <div className="shrink-0 px-3 py-2 border-t"
+              style={{ borderColor: 'rgba(200,168,74,0.2)', background: 'rgba(0,0,0,0.18)' }}>
+              <div style={{ fontSize: 9, color: '#c8a84a', marginBottom: 5,
+                fontFamily: "'DM Sans', sans-serif", lineHeight: '14px' }}>
+                {docsHitlPrompt}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={hintInput}
+                  onChange={e => setHintInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && hintInput.trim()) {
+                      onDocsHint?.(hintInput.trim());
+                      setHintInput('');
+                    }
+                  }}
+                  placeholder="heading name or https://..."
+                  style={{
+                    flex: 1, fontSize: 10, background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(200,168,74,0.3)', borderRadius: 4,
+                    padding: '4px 8px', color: 'white', outline: 'none',
+                    fontFamily: "'Fira Code', monospace",
+                  }}
+                />
+                <button
+                  onClick={() => { if (hintInput.trim()) { onDocsHint?.(hintInput.trim()); setHintInput(''); } }}
+                  style={{
+                    fontSize: 9, padding: '3px 8px', background: 'rgba(200,168,74,0.12)',
+                    border: '1px solid rgba(200,168,74,0.35)', borderRadius: 4,
+                    color: '#c8a84a', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+                  }}>
+                  send
+                </button>
+              </div>
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -193,7 +234,9 @@ function MiniLog({
 
 function BrowserPanel({
   label, frameSrc, active, isPaused, isComplete, wsActive,
-  stuckMilestone, canSkip, dimmed, pagesScraped, onTogglePause, onSkip, onFinish, onInteraction, onGoto, onRestart,
+  stuckMilestone, canSkip, dimmed, relevantDocs, docsCheckpoint,
+  onTogglePause, onSkip, onFinish, onInteraction, onGoto, onRestart,
+  onDocsCheckpointContinue, onDocsCheckpointFinish,
 }: any) {
   const [manualUrl, setManualUrl] = useState('');
 
@@ -252,12 +295,12 @@ function BrowserPanel({
                 fontFamily: "'DM Sans', sans-serif",
                 opacity: canSkip ? 1 : 0.35,
                 cursor: canSkip ? 'pointer' : 'not-allowed',
-                animation: canSkip ? 'pulseSkipHint 2s ease-in-out infinite 0.5s' : 'none',
+                animation: 'none',
               }}>
               <ArrowRight size={9} />
               skip
             </button>
-            {pagesScraped >= 30 && (
+            {relevantDocs >= 1 && (
               <button onClick={onFinish}
                 className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
                 style={{
@@ -351,6 +394,54 @@ function BrowserPanel({
                 Navigate to the{' '}
                 <span style={{ color: '#c8a84a', fontWeight: 700 }}>{stuckMilestone}</span>{' '}
                 page yourself, copy the URL, and paste it into the highlighted bar above — the agent will take it from there.
+              </div>
+            </div>
+          </>
+        )}
+
+        {docsCheckpoint && !isComplete && (
+          <>
+            <div className="absolute inset-0 pointer-events-none"
+              style={{ background: 'rgba(0,0,0,0.52)' }} />
+            <div className="absolute bottom-0 left-0 right-0 px-4 py-4 flex flex-col gap-3"
+              style={{
+                background: 'linear-gradient(to top, rgba(0,0,0,0.98) 75%, transparent)',
+                animation: 'stuckFadeIn 0.45s cubic-bezier(0.22,1,0.36,1) both',
+              }}>
+              <div className="flex items-center gap-2">
+                <span style={{ fontSize: 13 }}>✓</span>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#6eb0e8', letterSpacing: '1.5px',
+                  fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase' }}>
+                  {docsCheckpoint.urls.length} relevant pages found
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {docsCheckpoint.urls.map((url: string, i: number) => (
+                  <div key={i} style={{ fontSize: 9, color: '#6dc08a', fontFamily: "'Fira Code', monospace",
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    • {url.replace(/^https?:\/\//, '')}
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)', lineHeight: '15px',
+                fontFamily: "'DM Sans', sans-serif" }}>
+                Stop here with what&apos;s collected, or keep searching for more relevant pages.
+              </div>
+              <div className="flex gap-2">
+                <button onClick={onDocsCheckpointFinish}
+                  className="flex-1 py-1.5 rounded transition-all"
+                  style={{ background: 'rgba(109,192,138,0.12)', border: '1px solid rgba(109,192,138,0.4)',
+                    color: '#6dc08a', fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
+                    fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
+                  ✓ done for now
+                </button>
+                <button onClick={onDocsCheckpointContinue}
+                  className="flex-1 py-1.5 rounded transition-all"
+                  style={{ background: 'rgba(110,176,232,0.12)', border: '1px solid rgba(110,176,232,0.4)',
+                    color: '#6eb0e8', fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
+                    fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
+                  keep searching →
+                </button>
               </div>
             </div>
           </>
@@ -678,8 +769,10 @@ function DashboardContent() {
     ? `riva-session:${runId}`
     : `riva-session:${rivaUrl}|${compUrl}`;
 
-  const sessionIdRef    = useRef(crypto.randomUUID());
-  const isRestoringRef  = useRef(false);
+  const sessionIdRef      = useRef(crypto.randomUUID());
+  const isRestoringRef    = useRef(false);
+  const autoSubmittedRef  = useRef(false);
+  const pdfRef            = useRef<HTMLDivElement>(null);
   // storageChecked gates WS connections so we don't connect before knowing if we're restoring
   const [storageChecked, setStorageChecked] = useState(false);
 
@@ -705,6 +798,7 @@ function DashboardContent() {
           const saved = JSON.parse(raw);
           isRestoringRef.current = true;
           setIsRestoring(true);
+          setQuerySubmitted(true);
           if (saved.sessionId)     sessionIdRef.current = saved.sessionId;
           if (saved.rivaFrame)     setRivaFrame(saved.rivaFrame);
           if (saved.compFrame)     setCompFrame(saved.compFrame);
@@ -738,8 +832,17 @@ function DashboardContent() {
   const [logsExpanded,     setLogsExpanded]     = useState(true);
   const [bottomExpanded,   setBottomExpanded]   = useState(false);
   const [sessionInvalid,   setSessionInvalid]   = useState<{ side: string; reason?: string } | null>(null);
-  const [rivaPagesScraped, setRivaPagesScraped] = useState(0);
-  const [compPagesScraped, setCompPagesScraped] = useState(0);
+  const [rivaQueryPending, setRivaQueryPending] = useState(false);
+  const [compQueryPending, setCompQueryPending] = useState(false);
+  const [queryInput,       setQueryInput]       = useState('');
+  const [userQuery,        setUserQuery]        = useState('');
+  const [querySubmitted,   setQuerySubmitted]   = useState(false);
+  const [rivaDocsHitl,       setRivaDocsHitl]       = useState<string | null>(null);
+  const [compDocsHitl,       setCompDocsHitl]       = useState<string | null>(null);
+  const [rivaDocsCheckpoint, setRivaDocsCheckpoint] = useState<string[] | null>(null);
+  const [compDocsCheckpoint, setCompDocsCheckpoint] = useState<string[] | null>(null);
+  const [rivaRelevantDocs, setRivaRelevantDocs] = useState(0);
+  const [compRelevantDocs, setCompRelevantDocs] = useState(0);
 
   // Persist UI state
   useEffect(() => {
@@ -770,32 +873,13 @@ function DashboardContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rivaUrl, compUrl]);
 
-  // Synthetic thought when a domain is already cached
-  useEffect(() => {
-    if (rivaCanSkip && !rivaComplete && !isRestoringRef.current) {
-      setRivaThoughts(p => [...p, {
-        text: 'Domain already indexed — click skip to use cached data.',
-        state: 'found', ts: now(),
-      }]);
-    }
-  }, [rivaCanSkip]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (compCanSkip && !compComplete && !isRestoringRef.current) {
-      setCompThoughts(p => [...p, {
-        text: 'Domain already indexed — click skip to use cached data.',
-        state: 'found', ts: now(),
-      }]);
-    }
-  }, [compCanSkip]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const rivaWsRef     = useRef<WebSocket | null>(null);
   const compWsRef     = useRef<WebSocket | null>(null);
   const pipelineWsRef = useRef<WebSocket | null>(null);
 
   // pipeline WebSocket, only open after storage is confirmed
   useEffect(() => {
-    if (!storageChecked) return;
+    if (!storageChecked || !querySubmitted) return;
     if (isRestoringRef.current || !sessionId || expected === 0) return;
     const ws = new WebSocket(`${WS_BASE}/ws/pipeline?session=${sessionId}&expected=${expected}`);
     pipelineWsRef.current = ws;
@@ -815,15 +899,15 @@ function DashboardContent() {
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, storageChecked]);
+  }, [sessionId, storageChecked, querySubmitted]);
 
-  // Riva browse WebSocket, only open after storage is confirmed
+  // Riva browse WebSocket, only open after storage is confirmed and query submitted
   useEffect(() => {
-    if (!storageChecked) return;
+    if (!storageChecked || !querySubmitted) return;
     if (isRestoringRef.current || !rivaUrl) { setRivaWsState('closed'); return; }
     const ws = new WebSocket(`${WS_BASE}/ws/browse?session=${sessionId}&role=riva`);
     rivaWsRef.current = ws;
-    ws.onopen    = () => { setRivaWsState('open'); ws.send(JSON.stringify({ url: rivaUrl })); };
+    ws.onopen    = () => { setRivaWsState('open'); ws.send(JSON.stringify({ url: rivaUrl, query: userQuery })); };
     ws.onclose   = () => setRivaWsState('closed');
     ws.onerror   = () => { setRivaWsState('closed'); setRivaThoughts(p => [...p, { text: 'WebSocket connection failed — is the backend running?', state: 'error', ts: now() }]); };
     ws.onmessage = (e) => {
@@ -831,9 +915,12 @@ function DashboardContent() {
       if (msg.type === 'frame')               setRivaFrame(`data:image/jpeg;base64,${msg.data}`);
       else if (msg.type === 'thought')        setRivaThoughts(p => [...p, { ...msg, ts: now() }]);
       else if (msg.type === 'auto_pause')     setRivaPaused(true);
-      else if (msg.type === 'page_saved')     setRivaPagesScraped(p => p + 1);
       else if (msg.type === 'stuck_guidance') setRivaStuckMilestone(msg.milestone);
-      else if (msg.type === 'browse_complete') { setRivaComplete(true); setRivaStuckMilestone(null); }
+      else if (msg.type === 'query_prompt')   { setRivaQueryPending(true); setLogsExpanded(true); }
+      else if (msg.type === 'docs_hitl')       { setRivaDocsHitl(msg.prompt); setLogsExpanded(true); }
+      else if (msg.type === 'docs_checkpoint') { setRivaDocsCheckpoint(msg.urls); setRivaPaused(true); }
+      else if (msg.type === 'relevant_doc_saved') setRivaRelevantDocs(p => p + 1);
+      else if (msg.type === 'browse_complete') { setRivaComplete(true); setRivaStuckMilestone(null); setRivaQueryPending(false); setRivaDocsHitl(null); setRivaDocsCheckpoint(null); }
       else if (msg.type === 'session_invalid') {
         setSessionInvalid({ side: 'riva' });
         setPipelineLogs([]);
@@ -842,15 +929,15 @@ function DashboardContent() {
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rivaUrl, storageChecked]);
+  }, [rivaUrl, storageChecked, querySubmitted]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // competitor browse WebSocket, only open after storage is confirmed
   useEffect(() => {
-    if (!storageChecked) return;
+    if (!storageChecked || !querySubmitted) return;
     if (isRestoringRef.current || !compUrl) { setCompWsState('closed'); return; }
     const ws = new WebSocket(`${WS_BASE}/ws/browse?session=${sessionId}&role=comp`);
     compWsRef.current = ws;
-    ws.onopen    = () => { setCompWsState('open'); ws.send(JSON.stringify({ url: compUrl })); };
+    ws.onopen    = () => { setCompWsState('open'); ws.send(JSON.stringify({ url: compUrl, query: userQuery })); };
     ws.onclose   = () => setCompWsState('closed');
     ws.onerror   = () => { setCompWsState('closed'); setCompThoughts(p => [...p, { text: 'WebSocket connection failed — is the backend running?', state: 'error', ts: now() }]); };
     ws.onmessage = (e) => {
@@ -858,9 +945,12 @@ function DashboardContent() {
       if (msg.type === 'frame')               setCompFrame(`data:image/jpeg;base64,${msg.data}`);
       else if (msg.type === 'thought')        setCompThoughts(p => [...p, { ...msg, ts: now() }]);
       else if (msg.type === 'auto_pause')     setCompPaused(true);
-      else if (msg.type === 'page_saved')     setCompPagesScraped(p => p + 1);
+      else if (msg.type === 'query_prompt')   { setCompQueryPending(true); setLogsExpanded(true); }
+      else if (msg.type === 'docs_hitl')       { setCompDocsHitl(msg.prompt); setLogsExpanded(true); }
+      else if (msg.type === 'docs_checkpoint') { setCompDocsCheckpoint(msg.urls); setCompPaused(true); }
+      else if (msg.type === 'relevant_doc_saved') setCompRelevantDocs(p => p + 1);
       else if (msg.type === 'stuck_guidance') setCompStuckMilestone(msg.milestone);
-      else if (msg.type === 'browse_complete') { setCompComplete(true); setCompStuckMilestone(null); }
+      else if (msg.type === 'browse_complete') { setCompComplete(true); setCompStuckMilestone(null); setCompQueryPending(false); setCompDocsHitl(null); setCompDocsCheckpoint(null); }
       else if (msg.type === 'session_invalid') {
         setSessionInvalid({ side: 'comp' });
         setPipelineLogs([]);
@@ -869,7 +959,7 @@ function DashboardContent() {
     };
     return () => ws.close();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compUrl, storageChecked]);
+  }, [compUrl, storageChecked, querySubmitted]);
 
   function sendToWs(wsRef: React.RefObject<WebSocket | null>, msg: object) {
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(msg));
@@ -891,6 +981,31 @@ function DashboardContent() {
 
   function finishBrowse(side: 'riva' | 'comp') {
     sendToWs(side === 'riva' ? rivaWsRef : compWsRef, { type: 'finish' });
+  }
+
+  function submitQuery() {
+    if (!queryInput.trim()) return;
+    setUserQuery(queryInput.trim());
+    setQuerySubmitted(true);
+    setQueryInput('');
+  }
+
+  function submitDocsHint(side: 'riva' | 'comp', value: string) {
+    if (!value.trim()) return;
+    sendToWs(side === 'riva' ? rivaWsRef : compWsRef, { type: 'docs_hint', value: value.trim() });
+    if (side === 'riva') setRivaDocsHitl(null); else setCompDocsHitl(null);
+  }
+
+  function docsCheckpointContinue(side: 'riva' | 'comp') {
+    sendToWs(side === 'riva' ? rivaWsRef : compWsRef, { type: 'resume' });
+    if (side === 'riva') { setRivaPaused(false); setRivaDocsCheckpoint(null); }
+    else                 { setCompPaused(false);  setCompDocsCheckpoint(null); }
+  }
+
+  function docsCheckpointFinish(side: 'riva' | 'comp') {
+    sendToWs(side === 'riva' ? rivaWsRef : compWsRef, { type: 'finish' });
+    if (side === 'riva') setRivaDocsCheckpoint(null);
+    else                 setCompDocsCheckpoint(null);
   }
 
   function restartBrowse(url: string, side: 'riva' | 'comp') {
@@ -916,6 +1031,22 @@ function DashboardContent() {
     };
   }
 
+  // Auto-generate report with the initial query as focus once data is ready
+  useEffect(() => {
+    if (pipelineStatus === 'ready' && userQuery && !reportGenerating && !autoSubmittedRef.current) {
+      autoSubmittedRef.current = true;
+      submitFocus(userQuery);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipelineStatus]);
+
+  // Scroll to PDF section when first report arrives
+  useEffect(() => {
+    if (reports.length === 1) {
+      setTimeout(() => pdfRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+    }
+  }, [reports.length]);
+
   function submitFocus(focus: string) {
     setReportGenerating(true);
     sendToWs(pipelineWsRef, { type: 'focus', text: focus });
@@ -925,8 +1056,9 @@ function DashboardContent() {
     try { return new URL(url).hostname; } catch { return url; }
   }
 
-  const RIVA_COLOR = 'rgba(77,184,255,0.55)';
-  const COMP_COLOR = 'rgba(255,107,107,0.55)';
+  const pipelineActive = pipelineStatus === 'vectorizing' || reportGenerating;
+  const RIVA_COLOR = pipelineActive ? 'rgba(77,184,255,0.2)'  : 'rgba(77,184,255,0.55)';
+  const COMP_COLOR = pipelineActive ? 'rgba(255,107,107,0.2)' : 'rgba(255,107,107,0.55)';
 
   const rivaIsStuck  = rivaStuckMilestone !== null && !rivaComplete;
   const compIsStuck  = compStuckMilestone !== null && !compComplete;
@@ -948,8 +1080,72 @@ function DashboardContent() {
           0%   { opacity: 0; transform: translateY(12px); }
           100% { opacity: 1; transform: translateY(0); }
         }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+        @keyframes pipelineGlow {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(149,128,200,0.4); }
+          50%       { box-shadow: 0 0 8px 2px rgba(149,128,200,0.15); }
+        }
       `}</style>
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" />
+
+      {storageChecked && !querySubmitted && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 50,
+          background: 'rgba(8,6,16,0.88)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          backdropFilter: 'blur(6px)',
+        }}>
+          <div style={{
+            background: 'rgba(20,14,40,0.97)',
+            border: '1px solid rgba(110,176,232,0.25)',
+            borderRadius: 14, padding: '32px 36px', maxWidth: 480, width: '90%',
+          }}>
+            <div style={{ color: '#6dc08a', fontSize: 9, letterSpacing: '2.5px', fontWeight: 700,
+              fontFamily: "'DM Sans', sans-serif", marginBottom: 10 }}>
+              COMPETITIVE ANALYSIS
+            </div>
+            <div style={{ color: 'rgba(255,255,255,0.9)', fontSize: 16, fontWeight: 600,
+              fontFamily: "'DM Sans', sans-serif", marginBottom: 6 }}>
+              What do you want to analyze?
+            </div>
+            <div style={{ color: 'rgba(255,255,255,0.38)', fontSize: 11,
+              fontFamily: "'DM Sans', sans-serif", lineHeight: '17px', marginBottom: 22 }}>
+              The agent will collect pricing immediately, then search the documentation for your specific question.
+            </div>
+            <input
+              autoFocus
+              value={queryInput}
+              onChange={e => setQueryInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && submitQuery()}
+              placeholder="e.g. which is better for hosting large files?"
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(110,176,232,0.25)', borderRadius: 8,
+                padding: '11px 14px', color: 'white', fontSize: 13, outline: 'none',
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            />
+            <button onClick={submitQuery}
+              disabled={!queryInput.trim()}
+              style={{
+                marginTop: 12, width: '100%',
+                background: queryInput.trim() ? 'rgba(110,176,232,0.15)' : 'rgba(255,255,255,0.04)',
+                border: `1px solid ${queryInput.trim() ? 'rgba(110,176,232,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                borderRadius: 8, padding: '11px',
+                color: queryInput.trim() ? '#6eb0e8' : 'rgba(255,255,255,0.2)',
+                fontSize: 10, fontWeight: 700, letterSpacing: '1.5px',
+                fontFamily: "'DM Sans', sans-serif",
+                cursor: queryInput.trim() ? 'pointer' : 'not-allowed',
+              }}>
+              START DOCS SEARCH ↵
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Outer div — no h-screen/overflow-hidden so page expands when reports open */}
       <div className="flex flex-col text-white"
@@ -993,11 +1189,12 @@ function DashboardContent() {
           </header>
         </div>
 
-        <div className="px-3 flex flex-col">
-          <div className="flex flex-col shrink-0" style={{ height: 'calc(100vh - 88px)' }}>
+        <div className="px-3 flex flex-col" style={{ height: 'calc(100vh - 72px)' }}>
 
-            {(rivaUrl || compUrl) && (
-              <div className="flex gap-2 shrink-0 pt-2 pb-1.5">
+          {/* ── logs row ── */}
+          {(rivaUrl || compUrl) && (
+            <div className="shrink-0 pt-2 pb-1" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div className="flex gap-2">
                 {rivaUrl && (
                   <div className="flex-1 min-w-0 rounded-lg overflow-hidden"
                     style={{ border: `1.5px solid ${RIVA_COLOR}` }}>
@@ -1005,7 +1202,9 @@ function DashboardContent() {
                       domain={hostname(rivaUrl)}
                       eyeBgFill="#e0f7fa" eyeDarkFill="#001a2e" eyeLidFill="#1a0d40"
                       glowId="mini-log-riva" expanded={logsExpanded}
-                      onToggle={() => setLogsExpanded(v => !v)} />
+                      onToggle={() => setLogsExpanded(v => !v)}
+                      docsHitlPrompt={rivaDocsHitl ?? undefined}
+                      onDocsHint={(v) => submitDocsHint('riva', v)} />
                   </div>
                 )}
                 {compUrl && (
@@ -1015,112 +1214,226 @@ function DashboardContent() {
                       domain={hostname(compUrl)}
                       eyeBgFill="#fbe9e7" eyeDarkFill="#1e0000" eyeLidFill="#200a1a"
                       glowId="mini-log-comp" expanded={logsExpanded}
-                      onToggle={() => setLogsExpanded(v => !v)} />
+                      onToggle={() => setLogsExpanded(v => !v)}
+                      docsHitlPrompt={compDocsHitl ?? undefined}
+                      onDocsHint={(v) => submitDocsHint('comp', v)} />
                   </div>
                 )}
               </div>
-            )}
 
-            {/* Session invalid banner */}
-            {sessionInvalid && (
-              <div className="shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-lg mb-1"
-                style={{
-                  background: 'rgba(212,96,96,0.1)',
-                  border: '1px solid rgba(212,96,96,0.4)',
-                  animation: 'stuckFadeIn 0.4s cubic-bezier(0.22,1,0.36,1) both',
-                }}>
-                <span style={{ fontSize: 14 }}>✕</span>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#e87070',
-                    letterSpacing: '1px', fontFamily: "'DM Sans', sans-serif" }}>
-                    Invalid URL — session stopped
+              {/* pipeline status strip */}
+              {(() => {
+                const isActive = pipelineStatus === 'vectorizing' || reportGenerating;
+                const recentLogs = pipelineLogs.slice(-4);
+                if (pipelineLogs.length === 0) return null;
+                return (
+                  <div className="px-3 py-2 rounded-md"
+                    style={{
+                      background: isActive ? 'rgba(149,128,200,0.07)' : 'rgba(0,0,0,0.25)',
+                      border: isActive
+                        ? '1px solid rgba(149,128,200,0.35)'
+                        : '1px solid rgba(255,255,255,0.06)',
+                      animation: isActive ? 'pipelineGlow 2s ease-in-out infinite' : 'none',
+                      transition: 'background 0.4s ease, border-color 0.4s ease',
+                    }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      {isActive ? (
+                        <Loader2 size={10} style={{ color: '#9580c8', flexShrink: 0,
+                          animation: 'spin 1s linear infinite' }} />
+                      ) : (
+                        <span style={{ fontSize: 9, color: '#6dc08a', flexShrink: 0 }}>✓</span>
+                      )}
+                      <span style={{
+                        fontSize: 8, fontWeight: 700, letterSpacing: '2px', flexShrink: 0,
+                        color: isActive ? '#b8a0e8' : '#6dc08a',
+                        fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase',
+                      }}>
+                        {reportGenerating ? 'generating report' : pipelineStatus === 'vectorizing' ? 'indexing' : 'indexed'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      {recentLogs.map((l, i) => {
+                        const isMostRecent = i === recentLogs.length - 1;
+                        return (
+                          <div key={i} style={{
+                            fontSize: 9, fontFamily: "'Fira Code', monospace",
+                            color: isMostRecent
+                              ? (isActive ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.5)')
+                              : 'rgba(255,255,255,0.2)',
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                            transition: 'color 0.3s ease',
+                          }}>
+                            {l.text}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)',
-                    fontFamily: "'DM Sans', sans-serif", marginTop: 2 }}>
-                    The {sessionInvalid.side} URL doesn&apos;t appear to be a software product with pricing and documentation.
-                    Go back and try a different URL (e.g. stripe.com, vercel.com).
-                  </div>
-                </div>
-                <button onClick={() => { try { sessionStorage.removeItem(storageKey); } catch {} router.push('/'); }}
-                  className="ml-auto px-3 py-1 rounded-full shrink-0 transition-all"
-                  style={{ background: 'rgba(212,96,96,0.15)', color: '#e87070',
-                    border: '1px solid rgba(212,96,96,0.4)', fontSize: 9, fontWeight: 600,
-                    letterSpacing: '1.5px', fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
-                  ← go back
-                </button>
-              </div>
-            )}
-
-            <div className="flex-1 flex flex-col md:flex-row min-h-0 gap-2 pb-2">
-              {rivaUrl && (
-                <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
-                  style={{
-                    border: rivaIsStuck
-                      ? '1.5px solid rgba(200,168,74,0.8)'
-                      : `1.5px solid ${RIVA_COLOR}`,
-                    animation: rivaIsStuck ? 'pulseStuckBorder 1.8s ease-in-out infinite' : 'none',
-                    transition: 'border-color 0.3s ease',
-                  }}>
-                  <BrowserPanel label="riva" frameSrc={rivaFrame} active
-                    isPaused={rivaPaused} isComplete={rivaComplete} wsActive={rivaWsState === 'open'}
-                    stuckMilestone={rivaStuckMilestone} canSkip={rivaCanSkip} dimmed={rivaIsDimmed}
-                    pagesScraped={rivaPagesScraped}
-                    onTogglePause={() => togglePause('riva')}
-                    onSkip={() => skipBrowse('riva')}
-                    onFinish={() => finishBrowse('riva')}
-                    onInteraction={(t: string, x: number, y: number) => sendToWs(rivaWsRef, { type: t, x, y })}
-                    onGoto={(url: string) => { setRivaStuckMilestone(null); sendToWs(rivaWsRef, { type: 'goto', url }); }}
-                    onRestart={(url: string) => restartBrowse(url, 'riva')} />
-                </div>
-              )}
-              {compUrl && (
-                <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
-                  style={{
-                    border: compIsStuck
-                      ? '1.5px solid rgba(200,168,74,0.8)'
-                      : `1.5px solid ${COMP_COLOR}`,
-                    animation: compIsStuck ? 'pulseStuckBorder 1.8s ease-in-out infinite' : 'none',
-                    transition: 'border-color 0.3s ease',
-                  }}>
-                  <BrowserPanel label="comp" frameSrc={compFrame} active
-                    isPaused={compPaused} isComplete={compComplete} wsActive={compWsState === 'open'}
-                    stuckMilestone={compStuckMilestone} canSkip={compCanSkip} dimmed={compIsDimmed}
-                    pagesScraped={compPagesScraped}
-                    onTogglePause={() => togglePause('comp')}
-                    onSkip={() => skipBrowse('comp')}
-                    onFinish={() => finishBrowse('comp')}
-                    onInteraction={(t: string, x: number, y: number) => sendToWs(compWsRef, { type: t, x, y })}
-                    onGoto={(url: string) => { setCompStuckMilestone(null); sendToWs(compWsRef, { type: 'goto', url }); }}
-                    onRestart={(url: string) => restartBrowse(url, 'comp')} />
-                </div>
-              )}
+                );
+              })()}
             </div>
+          )}
 
-            <div className="flex flex-col sm:flex-row shrink-0 rounded-lg overflow-hidden mb-3"
+          {/* session invalid banner */}
+          {sessionInvalid && (
+            <div className="shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-lg mb-1"
               style={{
-                height: bottomExpanded ? 400 : 240,
-                transition: 'height 0.25s ease',
-                border: '1px solid rgba(255,255,255,0.1)',
+                background: 'rgba(212,96,96,0.1)',
+                border: '1px solid rgba(212,96,96,0.4)',
+                animation: 'stuckFadeIn 0.4s cubic-bezier(0.22,1,0.36,1) both',
               }}>
-              <div className="flex-1 min-w-0">
-                <InferenceLogPanel logs={pipelineLogs} status={pipelineStatus}
-                  hasReports={reports.length > 0}
-                  bottomExpanded={bottomExpanded} onToggleBottom={() => setBottomExpanded(v => !v)} />
+              <span style={{ fontSize: 14 }}>✕</span>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#e87070',
+                  letterSpacing: '1px', fontFamily: "'DM Sans', sans-serif" }}>
+                  Invalid URL — session stopped
+                </div>
+                <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.5)',
+                  fontFamily: "'DM Sans', sans-serif", marginTop: 2 }}>
+                  The {sessionInvalid.side} URL doesn&apos;t appear to be a software product with pricing and documentation.
+                  Go back and try a different URL (e.g. stripe.com, vercel.com).
+                </div>
               </div>
-              <div className="flex-1 min-w-0" style={{ borderLeft: '1px solid rgba(255,255,255,0.06)' }}>
-                <FocusPanel
-                  onSubmit={submitFocus}
-                  pipelineStatus={pipelineStatus}
-                  reportGenerating={reportGenerating}
-                  bottomExpanded={bottomExpanded}
-                  onToggleBottom={() => setBottomExpanded(v => !v)}
-                  sessionInvalid={!!sessionInvalid} />
+              <button onClick={() => { try { sessionStorage.removeItem(storageKey); } catch {} router.push('/'); }}
+                className="ml-auto px-3 py-1 rounded-full shrink-0 transition-all"
+                style={{ background: 'rgba(212,96,96,0.15)', color: '#e87070',
+                  border: '1px solid rgba(212,96,96,0.4)', fontSize: 9, fontWeight: 600,
+                  letterSpacing: '1.5px', fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
+                ← go back
+              </button>
+            </div>
+          )}
+
+          {/* ── browser panels ── */}
+          <div className="flex-1 flex flex-col md:flex-row min-h-0 gap-2 pb-2">
+            {rivaUrl && (
+              <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
+                style={{
+                  border: rivaIsStuck ? '1.5px solid rgba(200,168,74,0.8)' : `1.5px solid ${RIVA_COLOR}`,
+                  animation: rivaIsStuck ? 'pulseStuckBorder 1.8s ease-in-out infinite' : 'none',
+                  transition: 'border-color 0.3s ease',
+                }}>
+                <BrowserPanel label="riva" frameSrc={rivaFrame} active
+                  isPaused={rivaPaused} isComplete={rivaComplete} wsActive={rivaWsState === 'open'}
+                  stuckMilestone={rivaStuckMilestone} canSkip={rivaCanSkip} dimmed={rivaIsDimmed}
+                  relevantDocs={rivaRelevantDocs}
+                  docsCheckpoint={rivaDocsCheckpoint ? { urls: rivaDocsCheckpoint } : null}
+                  onTogglePause={() => togglePause('riva')}
+                  onSkip={() => skipBrowse('riva')}
+                  onFinish={() => finishBrowse('riva')}
+                  onInteraction={(t: string, x: number, y: number) => sendToWs(rivaWsRef, { type: t, x, y })}
+                  onGoto={(url: string) => { setRivaStuckMilestone(null); sendToWs(rivaWsRef, { type: 'goto', url }); }}
+                  onRestart={(url: string) => restartBrowse(url, 'riva')}
+                  onDocsCheckpointContinue={() => docsCheckpointContinue('riva')}
+                  onDocsCheckpointFinish={() => docsCheckpointFinish('riva')} />
               </div>
+            )}
+            {compUrl && (
+              <div className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-lg"
+                style={{
+                  border: compIsStuck ? '1.5px solid rgba(200,168,74,0.8)' : `1.5px solid ${COMP_COLOR}`,
+                  animation: compIsStuck ? 'pulseStuckBorder 1.8s ease-in-out infinite' : 'none',
+                  transition: 'border-color 0.3s ease',
+                }}>
+                <BrowserPanel label="comp" frameSrc={compFrame} active
+                  isPaused={compPaused} isComplete={compComplete} wsActive={compWsState === 'open'}
+                  stuckMilestone={compStuckMilestone} canSkip={compCanSkip} dimmed={compIsDimmed}
+                  relevantDocs={compRelevantDocs}
+                  docsCheckpoint={compDocsCheckpoint ? { urls: compDocsCheckpoint } : null}
+                  onTogglePause={() => togglePause('comp')}
+                  onSkip={() => skipBrowse('comp')}
+                  onFinish={() => finishBrowse('comp')}
+                  onInteraction={(t: string, x: number, y: number) => sendToWs(compWsRef, { type: t, x, y })}
+                  onGoto={(url: string) => { setCompStuckMilestone(null); sendToWs(compWsRef, { type: 'goto', url }); }}
+                  onRestart={(url: string) => restartBrowse(url, 'comp')}
+                  onDocsCheckpointContinue={() => docsCheckpointContinue('comp')}
+                  onDocsCheckpointFinish={() => docsCheckpointFinish('comp')} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── PDF section (below viewport, user scrolls to it) ── */}
+        {(reportGenerating || reports.length > 0) && (
+          <div ref={pdfRef} className="px-3 pb-6 pt-2">
+            <div className="rounded-xl overflow-hidden mx-auto"
+              style={{ border: '1px solid rgba(149,128,200,0.2)', background: '#0a0820', maxWidth: '56rem' }}>
+              {/* header */}
+              <div className="flex items-center justify-between px-4 py-2.5"
+                style={{ background: 'rgba(0,0,0,0.3)', borderBottom: '1px solid rgba(149,128,200,0.1)' }}>
+                <div className="flex items-center gap-3">
+                  <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#9580c8',
+                    fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase' }}>
+                    Report
+                  </span>
+                  {reportGenerating && (
+                    <div className="flex items-center gap-2">
+                      <Loader2 size={10} style={{ color: '#c8a84a', animation: 'spin 1s linear infinite' }} />
+                      <span style={{ fontSize: 9, color: '#c8a84a', fontFamily: "'Fira Code', monospace" }}>
+                        {pipelineLogs[pipelineLogs.length - 1]?.text || 'generating...'}
+                      </span>
+                    </div>
+                  )}
+                  {!reportGenerating && reports.length > 0 && (
+                    <span style={{ fontSize: 9, color: '#6dc08a', fontFamily: "'Fira Code', monospace" }}>
+                      ✓ ready
+                    </span>
+                  )}
+                </div>
+                {reports.length > 0 && (
+                  <button onClick={() => downloadBlob(`${API_BASE}${reports[0].url}`, reports[0].filename)}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded transition-all"
+                    style={{ background: 'rgba(109,192,138,0.08)', color: '#6dc08a',
+                      border: '1px solid rgba(109,192,138,0.2)', fontSize: 8,
+                      fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
+                    <Download size={8} /> download
+                  </button>
+                )}
+              </div>
+
+              {/* PDF view — sized to one full page */}
+              {reports.map((r, i) => {
+                const previewUrl = `${API_BASE}${r.previewUrl}`;
+                return (
+                  <div key={i} style={{ position: 'relative' }}>
+                    <iframe
+                      src={previewUrl}
+                      title="report"
+                      style={{
+                        width: '100%',
+                        /* A4 ratio at container width — shows exactly one full page */
+                        height: 'min(calc(56rem * 1.414), 90vh)',
+                        border: 'none',
+                        display: 'block',
+                        background: 'white',
+                      }}
+                    />
+                    <button
+                      onClick={() => window.open(previewUrl, '_blank')}
+                      style={{
+                        position: 'absolute', top: 10, right: 10,
+                        background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.15)',
+                        borderRadius: 6, padding: '4px 8px', cursor: 'pointer',
+                        color: 'rgba(255,255,255,0.6)', fontSize: 9,
+                        fontFamily: "'DM Sans', sans-serif", letterSpacing: '1px',
+                      }}>
+                      ⤢ fullscreen
+                    </button>
+                  </div>
+                );
+              })}
+
+              {reportGenerating && reports.length === 0 && (
+                <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)',
+                    fontFamily: "'Fira Code', monospace", letterSpacing: '2px' }}>
+                    building report...
+                  </span>
+                </div>
+              )}
             </div>
           </div>
-
-          {reports.length > 0 && <ReportPreviewSection reports={reports} />}
-        </div>
+        )}
       </div>
     </>
   );
