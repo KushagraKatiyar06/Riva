@@ -6,6 +6,7 @@ from .db import init_db
 from .routes import router as http_router
 from .ws_browse import router as browse_router
 from .ws_pipeline import router as pipeline_router
+from .ws_chat import router as chat_router
 
 app = FastAPI(title="Riva Strategic Pathfinder")
 app.add_middleware(
@@ -17,5 +18,6 @@ app.add_middleware(
 app.include_router(http_router)
 app.include_router(browse_router)
 app.include_router(pipeline_router)
+app.include_router(chat_router)
 
 init_db()

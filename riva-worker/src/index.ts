@@ -103,8 +103,12 @@ export default {
           geminiData.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
           'Unable to generate an answer.';
 
+        const sources = [...new Set(
+          matches.map(m => (m.metadata as Record<string, string>)?.url).filter(Boolean)
+        )];
+
         return new Response(
-          JSON.stringify({ answer, sources: matches.length }),
+          JSON.stringify({ answer, sources }),
           { headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) } }
         );
       } catch (err: unknown) {

@@ -11,6 +11,7 @@ const WS_BASE  = API_BASE.replace(/^http/, 'ws');
 
 type Thought     = { text: string; state: string; ts: string };
 type PipelineLog = { text: string; state: string; ts: string };
+type ChatMessage = { role: 'user' | 'assistant'; text: string; sources?: string[]; thoughts?: string[] };
 
 const STATE_COLORS: Record<string, string> = {
   info:       '#8a8a9e',
@@ -141,12 +142,14 @@ function SmallEye({ color, bgFill, darkFill, lidFill, glowId, size = 44, agentSt
 
 function MiniLog({
   thoughts, color, accentColor, domain, eyeBgFill, eyeDarkFill, eyeLidFill, glowId,
-  expanded, onToggle, docsHitlPrompt, onDocsHint,
+  expanded, onToggle, docsHitlPrompt, onDocsHint, onDocsHitlFinish, docsProgress,
 }: {
   thoughts: Thought[]; color: string; accentColor: string; domain: string;
   eyeBgFill: string; eyeDarkFill: string; eyeLidFill: string; glowId: string;
   expanded: boolean; onToggle: () => void;
   docsHitlPrompt?: string; onDocsHint?: (value: string) => void;
+  onDocsHitlFinish?: () => void;
+  docsProgress?: {current: number, total: number};
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [hintInput, setHintInput] = useState('');
@@ -172,11 +175,30 @@ function MiniLog({
             </span>
           )}
         </div>
-        <button onClick={onToggle} style={{ color: 'rgba(255,255,255,0.3)' }}
-          className="hover:text-white/60 transition-colors p-2">
-          {expanded ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
-        </button>
+        <div className="flex items-center gap-2">
+          {docsProgress && docsProgress.total > 0 && (
+            <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.35)',
+              fontFamily: "'Fira Code', monospace", letterSpacing: '0.3px' }}>
+              {docsProgress.current}/{docsProgress.total}
+            </span>
+          )}
+          <button onClick={onToggle} style={{ color: 'rgba(255,255,255,0.3)' }}
+            className="hover:text-white/60 transition-colors p-2">
+            {expanded ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
+          </button>
+        </div>
       </div>
+      {docsProgress && docsProgress.total > 0 && (
+        <div style={{ height: 2, background: 'rgba(255,255,255,0.06)', flexShrink: 0 }}>
+          <div style={{
+            height: '100%',
+            width: `${Math.min(100, Math.round((docsProgress.current / docsProgress.total) * 100))}%`,
+            background: accentColor,
+            transition: 'width 0.5s ease',
+            opacity: 0.7,
+          }} />
+        </div>
+      )}
       {expanded && (
         <>
           <div ref={scrollRef} className="overflow-y-auto px-3 py-2 space-y-0.5"
@@ -223,6 +245,15 @@ function MiniLog({
                   }}>
                   send
                 </button>
+                <button
+                  onClick={onDocsHitlFinish}
+                  style={{
+                    fontSize: 9, padding: '3px 8px', background: 'rgba(109,192,138,0.10)',
+                    border: '1px solid rgba(109,192,138,0.35)', borderRadius: 4,
+                    color: '#6dc08a', cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+                  }}>
+                  ✓ done
+                </button>
               </div>
             </div>
           )}
@@ -234,14 +265,14 @@ function MiniLog({
 
 function BrowserPanel({
   label, frameSrc, active, isPaused, isComplete, wsActive,
-  stuckMilestone, canSkip, dimmed, relevantDocs, docsCheckpoint,
+  stuckMilestone, canSkip, dimmed, relevantDocs, docsCheckpoint, docsHitlActive,
   onTogglePause, onSkip, onFinish, onInteraction, onGoto, onRestart,
   onDocsCheckpointContinue, onDocsCheckpointFinish,
 }: any) {
   const [manualUrl, setManualUrl] = useState('');
 
   function handleClick(e: any) {
-    if (!active || !frameSrc) return;
+    if (!active || !frameSrc || isComplete) return;
     const rect = e.currentTarget.getBoundingClientRect();
     onInteraction?.('click', (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);
   }
@@ -267,23 +298,26 @@ function BrowserPanel({
           </div>
         ) : (
           <>
-            <button onClick={onTogglePause}
-              className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
-              style={{
-                background: isPaused ? 'rgba(109,192,138,0.15)' : 'rgba(255,255,255,0.92)',
-                color:      isPaused ? '#6dc08a' : '#140e28',
-                border:     isPaused
-                  ? '1px solid rgba(109,192,138,0.5)'
-                  : pauseButtonPulsing
-                    ? '1px solid rgba(109,192,138,0.8)'
-                    : '1px solid rgba(255,255,255,0.8)',
-                fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
-                fontFamily: "'DM Sans', sans-serif",
-                animation: pauseButtonPulsing ? 'pulseSkipHint 2s ease-in-out infinite' : 'none',
-              }}>
-              {isPaused ? <Play size={9} fill="currentColor" /> : <Pause size={9} fill="currentColor" />}
-              {isPaused ? 'resume' : 'pause'}
-            </button>
+            {/* Hide pause/resume when a HITL overlay is active — resuming would bypass those flows */}
+            {!docsCheckpoint && !docsHitlActive && (
+              <button onClick={onTogglePause}
+                className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
+                style={{
+                  background: isPaused ? 'rgba(109,192,138,0.15)' : 'rgba(255,255,255,0.92)',
+                  color:      isPaused ? '#6dc08a' : '#140e28',
+                  border:     isPaused
+                    ? '1px solid rgba(109,192,138,0.5)'
+                    : pauseButtonPulsing
+                      ? '1px solid rgba(109,192,138,0.8)'
+                      : '1px solid rgba(255,255,255,0.8)',
+                  fontSize: 9, fontWeight: 700, letterSpacing: '1.5px',
+                  fontFamily: "'DM Sans', sans-serif",
+                  animation: pauseButtonPulsing ? 'pulseSkipHint 2s ease-in-out infinite' : 'none',
+                }}>
+                {isPaused ? <Play size={9} fill="currentColor" /> : <Pause size={9} fill="currentColor" />}
+                {isPaused ? 'resume' : 'pause'}
+              </button>
+            )}
             <button onClick={canSkip ? onSkip : undefined}
               className="flex items-center gap-1.5 px-3 py-1 rounded shrink-0 transition-all"
               disabled={!canSkip}
@@ -843,6 +877,16 @@ function DashboardContent() {
   const [compDocsCheckpoint, setCompDocsCheckpoint] = useState<string[] | null>(null);
   const [rivaRelevantDocs, setRivaRelevantDocs] = useState(0);
   const [compRelevantDocs, setCompRelevantDocs] = useState(0);
+  const [rivaDocsProgress, setRivaDocsProgress] = useState<{current: number, total: number} | null>(null);
+  const [compDocsProgress, setCompDocsProgress] = useState<{current: number, total: number} | null>(null);
+
+  const [activeTab,     setActiveTab]     = useState<'report' | 'chat'>('report');
+  const [chatMessages,  setChatMessages]  = useState<ChatMessage[]>([]);
+  const [chatInput,     setChatInput]     = useState('');
+  const [chatLoading,   setChatLoading]   = useState(false);
+  const [chatThoughts,  setChatThoughts]  = useState<string[]>([]);
+  const chatWsRef  = useRef<WebSocket | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Persist UI state
   useEffect(() => {
@@ -876,6 +920,7 @@ function DashboardContent() {
   const rivaWsRef     = useRef<WebSocket | null>(null);
   const compWsRef     = useRef<WebSocket | null>(null);
   const pipelineWsRef = useRef<WebSocket | null>(null);
+  const chatPendingThoughtsRef = useRef<string[]>([]);
 
   // pipeline WebSocket, only open after storage is confirmed
   useEffect(() => {
@@ -901,6 +946,38 @@ function DashboardContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, storageChecked, querySubmitted]);
 
+  // Chat WebSocket — stays open for the session duration
+  useEffect(() => {
+    if (!storageChecked || !querySubmitted) return;
+    const ws = new WebSocket(`${WS_BASE}/ws/chat?session=${sessionId}`);
+    chatWsRef.current = ws;
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'thought') {
+        chatPendingThoughtsRef.current = [...chatPendingThoughtsRef.current, msg.text];
+        setChatThoughts([...chatPendingThoughtsRef.current]);
+      } else if (msg.type === 'answer') {
+        const thoughts = [...chatPendingThoughtsRef.current];
+        chatPendingThoughtsRef.current = [];
+        setChatThoughts([]);
+        setChatLoading(false);
+        setChatMessages(prev => [...prev, {
+          role: 'assistant',
+          text: msg.text,
+          sources: msg.sources || [],
+          thoughts,
+        }]);
+      }
+    };
+    ws.onerror = () => {
+      setChatLoading(false);
+      setChatThoughts([]);
+      chatPendingThoughtsRef.current = [];
+    };
+    return () => ws.close();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, storageChecked, querySubmitted]);
+
   // Riva browse WebSocket, only open after storage is confirmed and query submitted
   useEffect(() => {
     if (!storageChecked || !querySubmitted) return;
@@ -920,7 +997,8 @@ function DashboardContent() {
       else if (msg.type === 'docs_hitl')       { setRivaDocsHitl(msg.prompt); setLogsExpanded(true); }
       else if (msg.type === 'docs_checkpoint') { setRivaDocsCheckpoint(msg.urls); setRivaPaused(true); }
       else if (msg.type === 'relevant_doc_saved') setRivaRelevantDocs(p => p + 1);
-      else if (msg.type === 'browse_complete') { setRivaComplete(true); setRivaStuckMilestone(null); setRivaQueryPending(false); setRivaDocsHitl(null); setRivaDocsCheckpoint(null); }
+      else if (msg.type === 'docs_progress') { msg.total > 0 ? setRivaDocsProgress({current: msg.current, total: msg.total}) : setRivaDocsProgress(null); }
+      else if (msg.type === 'browse_complete') { setRivaComplete(true); setRivaStuckMilestone(null); setRivaQueryPending(false); setRivaDocsHitl(null); setRivaDocsCheckpoint(null); setRivaDocsProgress(null); }
       else if (msg.type === 'session_invalid') {
         setSessionInvalid({ side: 'riva' });
         setPipelineLogs([]);
@@ -949,8 +1027,9 @@ function DashboardContent() {
       else if (msg.type === 'docs_hitl')       { setCompDocsHitl(msg.prompt); setLogsExpanded(true); }
       else if (msg.type === 'docs_checkpoint') { setCompDocsCheckpoint(msg.urls); setCompPaused(true); }
       else if (msg.type === 'relevant_doc_saved') setCompRelevantDocs(p => p + 1);
+      else if (msg.type === 'docs_progress') { msg.total > 0 ? setCompDocsProgress({current: msg.current, total: msg.total}) : setCompDocsProgress(null); }
       else if (msg.type === 'stuck_guidance') setCompStuckMilestone(msg.milestone);
-      else if (msg.type === 'browse_complete') { setCompComplete(true); setCompStuckMilestone(null); setCompQueryPending(false); setCompDocsHitl(null); setCompDocsCheckpoint(null); }
+      else if (msg.type === 'browse_complete') { setCompComplete(true); setCompStuckMilestone(null); setCompQueryPending(false); setCompDocsHitl(null); setCompDocsCheckpoint(null); setCompDocsProgress(null); }
       else if (msg.type === 'session_invalid') {
         setSessionInvalid({ side: 'comp' });
         setPipelineLogs([]);
@@ -1040,16 +1119,41 @@ function DashboardContent() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipelineStatus]);
 
-  // Scroll to PDF section when first report arrives
+  // Auto-switch to report tab and scroll to it when the first report arrives
   useEffect(() => {
     if (reports.length === 1) {
+      setActiveTab('report');
       setTimeout(() => pdfRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
     }
   }, [reports.length]);
 
+  // Scroll chat to bottom when messages or thoughts update
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages, chatThoughts]);
+
   function submitFocus(focus: string) {
     setReportGenerating(true);
     sendToWs(pipelineWsRef, { type: 'focus', text: focus });
+  }
+
+  function sendChatMessage() {
+    const text = chatInput.trim();
+    if (!text || chatLoading) return;
+    const domains: string[] = [];
+    if (rivaUrl) try { domains.push(new URL(rivaUrl).hostname.replace(/^www\./, '')); } catch {}
+    if (compUrl) try { domains.push(new URL(compUrl).hostname.replace(/^www\./, '')); } catch {}
+    setChatMessages(prev => [...prev, { role: 'user', text }]);
+    setChatInput('');
+    setChatLoading(true);
+    setChatThoughts([]);
+    chatPendingThoughtsRef.current = [];
+    if (chatWsRef.current?.readyState === WebSocket.OPEN) {
+      chatWsRef.current.send(JSON.stringify({ type: 'message', text, domains }));
+    } else {
+      setChatLoading(false);
+      setChatMessages(prev => [...prev, { role: 'assistant', text: 'Chat connection lost — please refresh.', sources: [] }]);
+    }
   }
 
   function hostname(url: string) {
@@ -1204,7 +1308,9 @@ function DashboardContent() {
                       glowId="mini-log-riva" expanded={logsExpanded}
                       onToggle={() => setLogsExpanded(v => !v)}
                       docsHitlPrompt={rivaDocsHitl ?? undefined}
-                      onDocsHint={(v) => submitDocsHint('riva', v)} />
+                      onDocsHint={(v) => submitDocsHint('riva', v)}
+                      onDocsHitlFinish={() => finishBrowse('riva')}
+                      docsProgress={rivaDocsProgress ?? undefined} />
                   </div>
                 )}
                 {compUrl && (
@@ -1216,7 +1322,9 @@ function DashboardContent() {
                       glowId="mini-log-comp" expanded={logsExpanded}
                       onToggle={() => setLogsExpanded(v => !v)}
                       docsHitlPrompt={compDocsHitl ?? undefined}
-                      onDocsHint={(v) => submitDocsHint('comp', v)} />
+                      onDocsHint={(v) => submitDocsHint('comp', v)}
+                      onDocsHitlFinish={() => finishBrowse('comp')}
+                      docsProgress={compDocsProgress ?? undefined} />
                   </div>
                 )}
               </div>
@@ -1317,6 +1425,7 @@ function DashboardContent() {
                   isPaused={rivaPaused} isComplete={rivaComplete} wsActive={rivaWsState === 'open'}
                   stuckMilestone={rivaStuckMilestone} canSkip={rivaCanSkip} dimmed={rivaIsDimmed}
                   relevantDocs={rivaRelevantDocs}
+                  docsHitlActive={rivaDocsHitl != null}
                   docsCheckpoint={rivaDocsCheckpoint ? { urls: rivaDocsCheckpoint } : null}
                   onTogglePause={() => togglePause('riva')}
                   onSkip={() => skipBrowse('riva')}
@@ -1339,6 +1448,7 @@ function DashboardContent() {
                   isPaused={compPaused} isComplete={compComplete} wsActive={compWsState === 'open'}
                   stuckMilestone={compStuckMilestone} canSkip={compCanSkip} dimmed={compIsDimmed}
                   relevantDocs={compRelevantDocs}
+                  docsHitlActive={compDocsHitl != null}
                   docsCheckpoint={compDocsCheckpoint ? { urls: compDocsCheckpoint } : null}
                   onTogglePause={() => togglePause('comp')}
                   onSkip={() => skipBrowse('comp')}
@@ -1353,87 +1463,312 @@ function DashboardContent() {
           </div>
         </div>
 
-        {/* ── PDF section (below viewport, user scrolls to it) ── */}
-        {(reportGenerating || reports.length > 0) && (
-          <div ref={pdfRef} className="px-3 pb-6 pt-2">
-            <div className="rounded-xl overflow-hidden mx-auto"
-              style={{ border: '1px solid rgba(149,128,200,0.2)', background: '#0a0820', maxWidth: '56rem' }}>
-              {/* header */}
-              <div className="flex items-center justify-between px-4 py-2.5"
-                style={{ background: 'rgba(0,0,0,0.3)', borderBottom: '1px solid rgba(149,128,200,0.1)' }}>
-                <div className="flex items-center gap-3">
-                  <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#9580c8',
-                    fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase' }}>
-                    Report
+        {/* ── Tab bar + content (below browser panels) ── */}
+        <div ref={pdfRef} className="px-3 pb-8 pt-0">
+
+          {/* tab switcher */}
+          <div className="flex gap-1 mb-3 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+            {(['report', 'chat'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                style={{
+                  padding: '5px 16px',
+                  borderRadius: 6,
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: '2px',
+                  textTransform: 'uppercase',
+                  fontFamily: "'DM Sans', sans-serif",
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  background: activeTab === tab ? 'rgba(149,128,200,0.15)' : 'transparent',
+                  color: activeTab === tab ? '#c8aaff' : 'rgba(255,255,255,0.25)',
+                  border: activeTab === tab ? '1px solid rgba(149,128,200,0.4)' : '1px solid transparent',
+                }}>
+                {tab === 'report' ? 'Report' : 'Chat'}
+                {tab === 'report' && (reportGenerating || reports.length > 0) && (
+                  <span style={{ marginLeft: 6, display: 'inline-block', width: 5, height: 5,
+                    borderRadius: '50%', background: reports.length > 0 ? '#6dc08a' : '#c8a84a',
+                    verticalAlign: 'middle', position: 'relative', top: -1 }} />
+                )}
+                {tab === 'chat' && chatMessages.length > 0 && (
+                  <span style={{ marginLeft: 6, fontSize: 8, color: 'rgba(149,128,200,0.6)' }}>
+                    {chatMessages.filter(m => m.role === 'assistant').length}
                   </span>
-                  {reportGenerating && (
-                    <div className="flex items-center gap-2">
-                      <Loader2 size={10} style={{ color: '#c8a84a', animation: 'spin 1s linear infinite' }} />
-                      <span style={{ fontSize: 9, color: '#c8a84a', fontFamily: "'Fira Code', monospace" }}>
-                        {pipelineLogs[pipelineLogs.length - 1]?.text || 'generating...'}
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* Report tab */}
+          {activeTab === 'report' && (
+            <div>
+              {(reportGenerating || reports.length > 0) ? (
+                <div className="rounded-xl overflow-hidden mx-auto"
+                  style={{ border: '1px solid rgba(149,128,200,0.2)', background: '#0a0820', maxWidth: '56rem' }}>
+                  <div className="flex items-center justify-between px-4 py-2.5"
+                    style={{ background: 'rgba(0,0,0,0.3)', borderBottom: '1px solid rgba(149,128,200,0.1)' }}>
+                    <div className="flex items-center gap-3">
+                      <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#9580c8',
+                        fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase' }}>
+                        Report
+                      </span>
+                      {reportGenerating && (
+                        <div className="flex items-center gap-2">
+                          <Loader2 size={10} style={{ color: '#c8a84a', animation: 'spin 1s linear infinite' }} />
+                          <span style={{ fontSize: 9, color: '#c8a84a', fontFamily: "'Fira Code', monospace" }}>
+                            {pipelineLogs[pipelineLogs.length - 1]?.text || 'generating...'}
+                          </span>
+                        </div>
+                      )}
+                      {!reportGenerating && reports.length > 0 && (
+                        <span style={{ fontSize: 9, color: '#6dc08a', fontFamily: "'Fira Code', monospace" }}>
+                          ✓ ready
+                        </span>
+                      )}
+                    </div>
+                    {reports.length > 0 && (
+                      <button onClick={() => downloadBlob(`${API_BASE}${reports[0].url}`, reports[0].filename)}
+                        className="flex items-center gap-1.5 px-3 py-1 rounded transition-all"
+                        style={{ background: 'rgba(109,192,138,0.08)', color: '#6dc08a',
+                          border: '1px solid rgba(109,192,138,0.2)', fontSize: 8,
+                          fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
+                        <Download size={8} /> download
+                      </button>
+                    )}
+                  </div>
+
+                  {reports.map((r, i) => {
+                    const previewUrl = `${API_BASE}${r.previewUrl}`;
+                    return (
+                      <div key={i} style={{ position: 'relative' }}>
+                        <iframe
+                          src={previewUrl}
+                          title="report"
+                          style={{
+                            width: '100%',
+                            height: 'min(calc(56rem * 1.414), 90vh)',
+                            border: 'none',
+                            display: 'block',
+                            background: 'white',
+                          }}
+                        />
+                        <button
+                          onClick={() => window.open(previewUrl, '_blank')}
+                          style={{
+                            position: 'absolute', top: 10, right: 10,
+                            background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.15)',
+                            borderRadius: 6, padding: '4px 8px', cursor: 'pointer',
+                            color: 'rgba(255,255,255,0.6)', fontSize: 9,
+                            fontFamily: "'DM Sans', sans-serif", letterSpacing: '1px',
+                          }}>
+                          ⤢ fullscreen
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  {reportGenerating && reports.length === 0 && (
+                    <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)',
+                        fontFamily: "'Fira Code', monospace", letterSpacing: '2px' }}>
+                        building report...
                       </span>
                     </div>
                   )}
-                  {!reportGenerating && reports.length > 0 && (
-                    <span style={{ fontSize: 9, color: '#6dc08a', fontFamily: "'Fira Code', monospace" }}>
-                      ✓ ready
-                    </span>
-                  )}
                 </div>
-                {reports.length > 0 && (
-                  <button onClick={() => downloadBlob(`${API_BASE}${reports[0].url}`, reports[0].filename)}
-                    className="flex items-center gap-1.5 px-3 py-1 rounded transition-all"
-                    style={{ background: 'rgba(109,192,138,0.08)', color: '#6dc08a',
-                      border: '1px solid rgba(109,192,138,0.2)', fontSize: 8,
-                      fontFamily: "'DM Sans', sans-serif", cursor: 'pointer' }}>
-                    <Download size={8} /> download
-                  </button>
-                )}
-              </div>
-
-              {/* PDF view — sized to one full page */}
-              {reports.map((r, i) => {
-                const previewUrl = `${API_BASE}${r.previewUrl}`;
-                return (
-                  <div key={i} style={{ position: 'relative' }}>
-                    <iframe
-                      src={previewUrl}
-                      title="report"
-                      style={{
-                        width: '100%',
-                        /* A4 ratio at container width — shows exactly one full page */
-                        height: 'min(calc(56rem * 1.414), 90vh)',
-                        border: 'none',
-                        display: 'block',
-                        background: 'white',
-                      }}
-                    />
-                    <button
-                      onClick={() => window.open(previewUrl, '_blank')}
-                      style={{
-                        position: 'absolute', top: 10, right: 10,
-                        background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.15)',
-                        borderRadius: 6, padding: '4px 8px', cursor: 'pointer',
-                        color: 'rgba(255,255,255,0.6)', fontSize: 9,
-                        fontFamily: "'DM Sans', sans-serif", letterSpacing: '1px',
-                      }}>
-                      ⤢ fullscreen
-                    </button>
-                  </div>
-                );
-              })}
-
-              {reportGenerating && reports.length === 0 && (
-                <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)',
+              ) : (
+                <div style={{
+                  height: 160, display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center', gap: 8,
+                  border: '1px solid rgba(255,255,255,0.06)', borderRadius: 12,
+                  background: 'rgba(0,0,0,0.18)',
+                }}>
+                  <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.18)',
                     fontFamily: "'Fira Code', monospace", letterSpacing: '2px' }}>
-                    building report...
+                    {pipelineStatus === 'vectorizing' ? 'indexing data — report will appear here' :
+                     pipelineStatus === 'ready' ? 'generating report...' :
+                     'waiting for agents to finish...'}
                   </span>
                 </div>
               )}
             </div>
-          </div>
-        )}
+          )}
+
+          {/* Chat tab */}
+          {activeTab === 'chat' && (
+            <div className="rounded-xl overflow-hidden mx-auto"
+              style={{ border: '1px solid rgba(149,128,200,0.2)', background: '#0a0820', maxWidth: '56rem' }}>
+
+              {/* header */}
+              <div className="flex items-center gap-3 px-4 py-2.5"
+                style={{ background: 'rgba(0,0,0,0.3)', borderBottom: '1px solid rgba(149,128,200,0.1)' }}>
+                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#9580c8',
+                  fontFamily: "'DM Sans', sans-serif", textTransform: 'uppercase' }}>
+                  Chat
+                </span>
+                <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.2)', fontFamily: "'Fira Code', monospace" }}>
+                  {pipelineStatus === 'ready' ? 'knowledge base ready' :
+                   pipelineStatus === 'vectorizing' ? 'indexing...' : 'waiting for data...'}
+                </span>
+              </div>
+
+              {/* messages */}
+              <div style={{ minHeight: 320, maxHeight: '60vh', overflowY: 'auto', padding: '16px 20px',
+                display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {chatMessages.length === 0 && !chatLoading && (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
+                    justifyContent: 'center', height: 200, gap: 8, opacity: 0.35 }}>
+                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)',
+                      fontFamily: "'DM Sans', sans-serif" }}>
+                      Ask anything about the products you&apos;re comparing
+                    </span>
+                    <div className="flex flex-wrap gap-2 justify-center" style={{ marginTop: 8 }}>
+                      {['how do their pricing tiers compare?', 'which has better docs?', 'what are the key differences?'].map(hint => (
+                        <button key={hint} onClick={() => { setChatInput(hint); }}
+                          style={{ fontSize: 9, padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
+                            background: 'rgba(149,128,200,0.08)', color: 'rgba(200,170,255,0.5)',
+                            border: '1px solid rgba(149,128,200,0.15)', fontFamily: "'DM Sans', sans-serif" }}>
+                          {hint}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {chatMessages.map((msg, i) => (
+                  <div key={i}>
+                    {/* user message */}
+                    {msg.role === 'user' && (
+                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        <div style={{
+                          maxWidth: '75%', padding: '8px 12px', borderRadius: '10px 10px 2px 10px',
+                          background: 'rgba(149,128,200,0.15)', border: '1px solid rgba(149,128,200,0.3)',
+                          fontSize: 11, color: 'rgba(255,255,255,0.85)', lineHeight: '17px',
+                          fontFamily: "'DM Sans', sans-serif",
+                        }}>
+                          {msg.text}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* assistant message */}
+                    {msg.role === 'assistant' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {/* inline thoughts */}
+                        {msg.thoughts && msg.thoughts.length > 0 && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 4 }}>
+                            {msg.thoughts.map((t, ti) => (
+                              <div key={ti} style={{
+                                fontSize: 9, color: 'rgba(255,255,255,0.25)',
+                                fontFamily: "'Fira Code', monospace",
+                                paddingLeft: 8, borderLeft: '1px solid rgba(149,128,200,0.2)',
+                              }}>
+                                {t}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div style={{
+                          maxWidth: '85%', padding: '10px 14px', borderRadius: '2px 10px 10px 10px',
+                          background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.07)',
+                          fontSize: 11, color: 'rgba(255,255,255,0.8)', lineHeight: '19px',
+                          fontFamily: "'DM Sans', sans-serif", whiteSpace: 'pre-wrap',
+                        }}>
+                          {msg.text}
+                        </div>
+                        {msg.sources && msg.sources.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, paddingLeft: 2 }}>
+                            {msg.sources.slice(0, 5).map((src, si) => {
+                              let label = src;
+                              try { label = new URL(src).pathname.replace(/^\//, '').split('/').slice(0, 2).join('/') || src; } catch {}
+                              return (
+                                <a key={si} href={src} target="_blank" rel="noreferrer"
+                                  style={{ fontSize: 8, padding: '2px 7px', borderRadius: 3,
+                                    background: 'rgba(149,128,200,0.06)', color: 'rgba(149,128,200,0.5)',
+                                    border: '1px solid rgba(149,128,200,0.12)',
+                                    fontFamily: "'Fira Code', monospace", textDecoration: 'none',
+                                    maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                  }}>
+                                  ↗ {label}
+                                </a>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {/* streaming thoughts while loading */}
+                {chatLoading && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {chatThoughts.map((t, i) => (
+                      <div key={i} style={{
+                        fontSize: 9, color: 'rgba(255,255,255,0.3)',
+                        fontFamily: "'Fira Code', monospace",
+                        paddingLeft: 8, borderLeft: '1px solid rgba(149,128,200,0.2)',
+                      }}>
+                        {t}
+                      </div>
+                    ))}
+                    <div className="flex items-center gap-2" style={{ paddingLeft: 8, marginTop: 4 }}>
+                      <Loader2 size={9} style={{ color: '#9580c8', animation: 'spin 1s linear infinite' }} />
+                      <span style={{ fontSize: 9, color: 'rgba(149,128,200,0.5)',
+                        fontFamily: "'Fira Code', monospace" }}>
+                        thinking...
+                      </span>
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* input */}
+              <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', padding: '12px 16px',
+                display: 'flex', gap: 8, alignItems: 'flex-end',
+                background: 'rgba(0,0,0,0.25)' }}>
+                <textarea
+                  rows={2}
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  disabled={chatLoading}
+                  placeholder={
+                    pipelineStatus !== 'ready' ? 'waiting for indexing to complete...' :
+                    'ask about pricing, features, developer experience...'
+                  }
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } }}
+                  style={{
+                    flex: 1, background: 'rgba(255,255,255,0.04)',
+                    border: '1px solid rgba(149,128,200,0.2)', borderRadius: 8,
+                    padding: '8px 12px', color: 'rgba(255,255,255,0.85)',
+                    fontSize: 11, fontFamily: "'DM Sans', sans-serif",
+                    outline: 'none', resize: 'none', lineHeight: '17px',
+                  }}
+                />
+                <button
+                  onClick={sendChatMessage}
+                  disabled={!chatInput.trim() || chatLoading || pipelineStatus !== 'ready'}
+                  style={{
+                    padding: '8px 14px', borderRadius: 8, cursor: 'pointer',
+                    background: chatInput.trim() && !chatLoading && pipelineStatus === 'ready'
+                      ? 'rgba(149,128,200,0.2)' : 'rgba(255,255,255,0.04)',
+                    border: `1px solid ${chatInput.trim() && !chatLoading && pipelineStatus === 'ready'
+                      ? 'rgba(149,128,200,0.45)' : 'rgba(255,255,255,0.08)'}`,
+                    color: chatInput.trim() && !chatLoading && pipelineStatus === 'ready'
+                      ? '#c8aaff' : 'rgba(255,255,255,0.2)',
+                    fontSize: 11, fontFamily: "'DM Sans', sans-serif",
+                    transition: 'all 0.2s ease', alignSelf: 'flex-end',
+                  }}>
+                  →
+                </button>
+              </div>
+            </div>
+          )}
+
+        </div>
       </div>
     </>
   );

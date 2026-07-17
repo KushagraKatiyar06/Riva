@@ -212,10 +212,9 @@ async def browse_websocket(
                     f"{vectorized_note}{query_note}"
                     f"PAGE HEADINGS & NAV & FOOTER: {headings[:1200]}\n\n"
                     "RULES:\n"
-                    "- Only pursue NOT_STARTED milestones.\n"
-                    "- If Pricing is COMPLETED focus entirely on Documentation.\n"
+                    "- Current mission: find the PRICING or PLANS page and navigate to it.\n"
                     "- HOVER nav items like 'Developers' or 'Products' to reveal sub-menus.\n"
-                    "- Check footer links — many sites put Docs/Documentation in the footer.\n"
+                    "- Check footer links — many sites put Pricing in the footer.\n"
                     "- If a URL appears twice in RECENT URLS, try a different element.\n"
                     "- Do NOT target elements listed in ALREADY TRIED — pick a different one.\n"
                     "- Use SCROLL to reveal more content when no useful links are visible yet.\n"
@@ -365,12 +364,15 @@ async def browse_websocket(
                 return count
 
             def check_relevance(content: str) -> bool:
-                # Ask Gemini if this page answers the user's query
+                # Ask Gemini if this page meaningfully helps answer the user's query
                 try:
                     prompt = (
                         f"A user is researching: '{user_query}'\n\n"
-                        f"Page content excerpt:\n{content[:2500]}\n\n"
-                        "Does this page contain specific, useful information to help answer the user's research question?\n"
+                        f"Page content excerpt:\n{content[:3000]}\n\n"
+                        "Does this page contain meaningful information that helps answer the user's question? "
+                        "It does NOT need to be exclusively about the topic — a dedicated section is enough. "
+                        "Only say NO if the page is entirely unrelated (e.g. a general overview, marketing copy, "
+                        "release notes, or login page with no relevant technical content).\n"
                         "Reply with only YES or NO."
                     )
                     res = gemini_client.models.generate_content(
@@ -382,7 +384,7 @@ async def browse_websocket(
                     )
                     return "yes" in res.text.strip().lower()
                 except Exception:
-                    return True  # on error, include the page
+                    return False  # on error, skip the page
 
 
             def navigate_to_docs_landing() -> bool:
@@ -403,6 +405,23 @@ async def browse_websocket(
                 for _step in range(20):
                     if stop_event.is_set():
                         return False
+
+                    # Respect pause — user can take over navigation manually
+                    was_paused = not pause_event.is_set()
+                    while not pause_event.is_set():
+                        handle_gestures(page)
+                        if stop_event.is_set():
+                            return False
+                        page.wait_for_timeout(100)
+                    if stop_event.is_set():
+                        return False
+                    if was_paused:
+                        # Let the page the user navigated to settle
+                        try:
+                            page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        except Exception:
+                            pass
+                        page.wait_for_timeout(800)
 
                     handle_gestures(page)
 
@@ -511,7 +530,29 @@ async def browse_websocket(
                                     )
                                     page.wait_for_timeout(600)
                                     el.hover(force=True)
-                                    if goal == "CLICK":
+                                    if goal == "HOVER":
+                                        # wait for dropdown to paint then grab any docs link that appeared
+                                        page.wait_for_timeout(900)
+                                        try:
+                                            dropdown_href = page.evaluate("""() => {
+                                                const kw = ['docs','documentation','api','developer','reference','guide'];
+                                                for (const a of document.querySelectorAll('a[href]')) {
+                                                    const t = a.innerText.trim().toLowerCase();
+                                                    const h = a.href.toLowerCase();
+                                                    if (!kw.some(k => t.includes(k) || h.includes(k))) continue;
+                                                    const r = a.getBoundingClientRect();
+                                                    if (r.width > 0 && r.height > 0) return a.href;
+                                                }
+                                                return null;
+                                            }""")
+                                            if dropdown_href and validate_url(dropdown_href):
+                                                thought(f"Docs link revealed in dropdown — navigating.", "navigating")
+                                                page.goto(dropdown_href, wait_until="domcontentloaded", timeout=10000)
+                                                page.wait_for_timeout(800)
+                                                nav_frustration = 0
+                                        except Exception:
+                                            pass
+                                    else:
                                         url_before = page.url
                                         el.evaluate("el => el.setAttribute('target','_self')")
                                         try:
@@ -549,32 +590,85 @@ async def browse_websocket(
 
                     page.wait_for_timeout(400)
 
-                thought("Could not locate docs section — proceeding with current page.", "info")
+                # Try common docs paths before giving up or asking the user
+                _parsed = urlparse(page.url)
+                _root   = f"{_parsed.scheme}://{_parsed.netloc}"
+                for _path in ["/docs", "/documentation", "/api", "/developers", "/developer", "/reference"]:
+                    if stop_event.is_set():
+                        return False
+                    try:
+                        thought(f"Trying {_path}...", "navigating")
+                        page.goto(_root + _path, wait_until="domcontentloaded", timeout=8000)
+                        page.wait_for_timeout(600)
+                        _u = page.url.lower()
+                        _t = page.title().lower()
+                        _h = page.evaluate(
+                            "() => (document.querySelector('h1') || {innerText:''}).innerText"
+                        ).lower()
+                        if (any(k in _u for k in _DOCS_URL)
+                                or any(k in _t for k in _DOCS_CONTENT)
+                                or any(k in _h for k in _DOCS_CONTENT)):
+                            thought("Documentation landing found.", "found")
+                            return True
+                    except Exception:
+                        pass
+
+                # Still nothing — ask the user
+                thought(
+                    "⚠ Can't find the docs section automatically. "
+                    "Paste the docs URL above and press Enter — I'll take over from there.",
+                    "hitl",
+                )
+                thought_q.put({"type": "stuck_guidance", "milestone": "docs"})
+                thought_q.put({"type": "auto_pause"})
+                pause_event.clear()
+
+                for _ in range(120):
+                    if stop_event.is_set():
+                        return False
+                    while not pause_event.is_set():
+                        handle_gestures(page)
+                        if stop_event.is_set():
+                            return False
+                        page.wait_for_timeout(100)
+                    _u = page.url.lower()
+                    _t = page.title().lower()
+                    try:
+                        _h = page.evaluate(
+                            "() => (document.querySelector('h1') || {innerText:''}).innerText"
+                        ).lower()
+                    except Exception:
+                        _h = ""
+                    if (any(k in _u for k in _DOCS_URL)
+                            or any(k in _t for k in _DOCS_CONTENT)
+                            or any(k in _h for k in _DOCS_CONTENT)):
+                        thought("Documentation landing found.", "found")
+                        return True
+                    page.wait_for_timeout(500)
+
                 return False
+
+            def _do_save(url: str, text: str, relevant_docs_list: list):
+                save_extract(finishing_domain, "docs", url, text)
+                save_intel("docs", url, text)
+                thought(f"Section saved ({len(text):,} chars).", "found")
+                thought_q.put({"type": "relevant_doc_saved"})
+                relevant_docs_list.append(url)
+                if len(relevant_docs_list) == 5 and session and session in _sessions:
+                    _sessions[session].signal_early(finishing_domain)
+
+            def _save_planned_page(url: str, content: str,
+                                    relevant_docs_list: list) -> bool:
+                if len(content.strip()) < 300:
+                    return False
+                _do_save(url, content, relevant_docs_list)
+                return True
 
             def _save_relevant_page(url: str, content: str,
                                      relevant_docs_list: list) -> bool:
-                """Extract, save, and checkpoint. Returns True if relevant."""
                 if not check_relevance(content):
                     return False
-                text = full_page_extract(page)
-                save_extract(finishing_domain, "docs", url, text)
-                save_intel("docs", url, text)
-                thought(f"Relevant section saved ({len(text):,} chars).", "found")
-                thought_q.put({"type": "relevant_doc_saved"})
-                relevant_docs_list.append(url)
-                if len(relevant_docs_list) % 3 == 0:
-                    thought(
-                        f"Found {len(relevant_docs_list)} relevant pages — pausing for review.",
-                        "found",
-                    )
-                    thought_q.put({
-                        "type": "docs_checkpoint",
-                        "urls": relevant_docs_list[:],
-                        "count": len(relevant_docs_list),
-                    })
-                    thought_q.put({"type": "auto_pause"})
-                    pause_event.clear()
+                _do_save(url, content, relevant_docs_list)
                 return True
 
             def _pause_check() -> bool:
@@ -599,37 +693,130 @@ async def browse_websocket(
                 docs_visited: set[str] = set()
                 relevant_docs_list: list[str] = []
 
-                # ── Phase 1: plan ────────────────────────────────────────────
+                # load previously indexed doc URLs so we skip them in this run
+                if already_vectorized:
+                    existing_dir = EXTRACTS_DIR / finishing_domain
+                    for _fp in existing_dir.glob("docs_*.txt"):
+                        try:
+                            with open(_fp, "r", encoding="utf-8") as _fh:
+                                for _line in _fh:
+                                    if _line.startswith("URL"):
+                                        _url = _line.split(":", 1)[1].strip()
+                                        if _url:
+                                            docs_visited.add(_url)
+                                        break
+                        except Exception:
+                            pass
+                    if docs_visited:
+                        thought(f"{len(docs_visited)} pages already indexed — scanning for gaps.", "scanning")
+
                 thought("Scanning docs structure to build search plan...", "scanning")
                 planned_urls: list[str] = []
 
-                # Always extract link_data first (pure JS, instant)
+                try:
+                    parsed_docs = urlparse(page.url)
+                    path_parts  = [p for p in parsed_docs.path.split('/') if p]
+                    _DOCS_ROOTS = {"docs", "documentation", "api", "guide",
+                                   "developer", "reference", "sdk"}
+                    root_idx = next(
+                        (i for i, p in enumerate(path_parts) if p.lower() in _DOCS_ROOTS),
+                        None,
+                    )
+                    if root_idx is not None and len(path_parts) > root_idx + 1:
+                        docs_root = (
+                            f"{parsed_docs.scheme}://{parsed_docs.netloc}/"
+                            + "/".join(path_parts[: root_idx + 1]) + "/"
+                        )
+                        thought(f"Navigating to docs root: {docs_root}", "info")
+                        page.goto(docs_root, wait_until="domcontentloaded", timeout=12000)
+                except Exception:
+                    pass
+
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    page.wait_for_timeout(2000)
+                try:
+                    page.evaluate("window.scrollBy(0, 600)")
+                    page.wait_for_timeout(600)
+                    page.evaluate("window.scrollTo(0, 0)")
+                except Exception:
+                    pass
+
+                # extract hierarchical docs structure
                 link_data: list[dict] = []
                 try:
                     link_data = page.evaluate("""() => {
                         const seen = new Set();
-                        const els = document.querySelectorAll(
-                            'nav a[href], aside a[href], .sidebar a[href], ' +
-                            '[role=navigation] a[href], .menu a[href], ' +
-                            '.toc a[href], [data-sidebar] a[href]'
-                        );
-                        return Array.from(els)
-                            .map(a => ({ text: a.innerText.trim(), href: a.href }))
-                            .filter(x => {
-                                if (!x.text || x.text.length < 2 || x.text.length > 100) return false;
-                                if (seen.has(x.href)) return false;
-                                seen.add(x.href);
-                                return true;
-                            })
-                            .slice(0, 80);
+                        const items = [];
+
+                        const namedRoots = Array.from(document.querySelectorAll(
+                            'nav, aside, [role=navigation], [class*="sidebar"], [class*="Sidebar"],' +
+                            '[class*="sidenav"], [id*="sidebar"], [data-sidebar],' +
+                            '[aria-label*="navigation"], [aria-label*="sidebar"]'
+                        )).filter(el => el.querySelectorAll('a[href]').length > 2);
+
+                        const roots = namedRoots.length > 0 ? namedRoots : [document.body];
+
+                        roots.forEach(root => {
+                            root.querySelectorAll('a[href]').forEach(a => {
+                                const text = a.innerText.trim();
+                                if (!text || text.length < 2 || text.length > 120) return;
+                                if (seen.has(a.href)) return;
+                                seen.add(a.href);
+
+                                let depth = 0, el = a.parentElement;
+                                while (el && el !== root) {
+                                    if (['UL','OL','LI','DETAILS'].includes(el.tagName)) depth++;
+                                    el = el.parentElement;
+                                }
+
+                                let section = '';
+                                let cur = a.parentElement;
+                                while (cur && cur !== root && !section) {
+                                    let sib = cur.previousElementSibling;
+                                    while (sib && !section) {
+                                        const t = sib.innerText?.trim();
+                                        if (t && t.length < 60 && /^(H[1-4]|BUTTON|SUMMARY|SPAN|P)$/.test(sib.tagName))
+                                            section = t;
+                                        sib = sib.previousElementSibling;
+                                    }
+                                    cur = cur.parentElement;
+                                }
+
+                                items.push({ text, href: a.href, depth: Math.min(depth, 5), section });
+                            });
+                        });
+
+                        if (items.length < 5) {
+                            const host = window.location.hostname;
+                            const prefix = '/' + (window.location.pathname.split('/').filter(Boolean)[0] || '');
+                            document.querySelectorAll('a[href]').forEach(a => {
+                                const text = a.innerText.trim();
+                                if (!text || text.length < 2 || text.length > 120) return;
+                                if (seen.has(a.href)) return;
+                                try {
+                                    const u = new URL(a.href);
+                                    if (u.hostname !== host) return;
+                                    if (prefix !== '/' && !u.pathname.startsWith(prefix)) return;
+                                    if (u.hash && u.hash !== '#') return;
+                                } catch { return; }
+                                seen.add(a.href);
+                                items.push({ text, href: a.href, depth: 0, section: '' });
+                            });
+                        }
+
+                        return items.slice(0, 120);
                     }""")
                 except Exception as e:
-                    thought(f"Could not extract nav links: {e}", "info")
+                    thought(f"Link extraction error: {e}", "info")
 
-                def _keyword_fallback(links: list[dict], query: str, n: int = 6) -> list[str]:
-                    """Score links by query-word overlap when Gemini is unavailable."""
+                thought(f"Found {len(link_data)} doc links to analyse.", "scanning")
+
+                # keyword fallback if Gemini fails
+                def _keyword_fallback(links: list[dict], query: str, n: int = 10) -> list[str]:
                     _SKIP = {"pricing", "blog", "changelog", "status", "login",
-                             "signup", "sign-up", "twitter", "github", "discord"}
+                             "signup", "sign-up", "twitter", "github", "discord", "careers"}
                     words = set(w.lower() for w in re.split(r'\W+', query) if len(w) > 2)
                     scored = []
                     for x in links:
@@ -642,91 +829,288 @@ async def browse_websocket(
                     scored.sort(key=lambda t: -t[0])
                     return [href for _, href in scored[:n] if href]
 
-                if link_data:
-                    numbered = "\n".join(
-                        f"  {i+1}. [{x['text']}] → {x['href']}"
-                        for i, x in enumerate(link_data)
-                    )
-                    plan_prompt = (
-                        f"USER QUERY: {user_query}\n"
-                        f"Current docs page: {page.url}\n\n"
-                        f"AVAILABLE DOC SECTION LINKS (index. label → url):\n{numbered[:3000]}\n\n"
-                        "Pick the top 6 links by index number MOST RELEVANT to the user's query. "
-                        "Only pick links likely to contain specific information about the query. "
-                        "Do NOT pick Pricing, Blog, Changelog, or marketing pages.\n\n"
-                        'Reply ONLY with JSON (no markdown):\n'
-                        '{"thought":"..","selected":[1,4,7]}'
-                    )
+                def _nav_and_extract(target_url: str) -> tuple[str, str]:
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=14000)
                     try:
-                        # No screenshot — text-only is fast enough and avoids 504s
+                        page.wait_for_load_state("networkidle", timeout=1500)
+                    except Exception:
+                        page.wait_for_timeout(800)
+                    return page.evaluate("""() => {
+                        document.querySelectorAll('details:not([open])').forEach(d => d.setAttribute('open', ''));
+                        const text = document.body.innerText;
+                        const headings = Array.from(document.querySelectorAll('h1,h2,h3'))
+                            .map(h => h.innerText.trim()).filter(Boolean).join(' | ');
+                        return [text, headings];
+                    }""")
+
+                def _collect_article_subpages(host: str, docs_prefix: str) -> list[str]:
+                    _SKIP_SLUGS = {"blog", "changelog", "status", "login", "signup",
+                                   "sign-up", "pricing", "careers", "twitter", "github", "discord"}
+                    try:
+                        return page.evaluate(
+                            """(host, prefix, skipSlugs) => {
+                                const seen = new Set();
+                                const content = document.querySelector(
+                                    'main, article, [role="main"], [class*="content"], [class*="prose"], ' +
+                                    '[class*="markdown"], [id="main-content"], [id="content"]'
+                                ) || document.body;
+                                return Array.from(content.querySelectorAll('a[href]'))
+                                    .map(a => a.href)
+                                    .filter(href => {
+                                        try {
+                                            const u = new URL(href);
+                                            if (u.hostname !== host) return false;
+                                            if (!u.pathname.startsWith(prefix)) return false;
+                                            if (u.hash) return false;
+                                            const slug = u.pathname.split('/').pop() || '';
+                                            if (skipSlugs.includes(slug)) return false;
+                                            if (seen.has(href)) return false;
+                                            seen.add(href);
+                                            return true;
+                                        } catch { return false; }
+                                    });
+                            }""",
+                            host,
+                            docs_prefix,
+                            list(_SKIP_SLUGS),
+                        )
+                    except Exception:
+                        return []
+
+                page_headings_map: dict[str, str] = {}
+
+                def _visit_planned(target_url: str) -> bool:
+                    nonlocal docs_visited
+                    if target_url in docs_visited or not validate_url(target_url):
+                        return False
+                    short = target_url.split('/')[-1] or target_url.split('/')[-2] or target_url
+                    thought(f"Reading: {short}", "navigating")
+                    try:
+                        content, headings = _nav_and_extract(target_url)
+                        curr_url = page.url
+                        docs_visited.add(curr_url)
+                        docs_visited.add(target_url)
+                        visited_urls.append(curr_url)
+                        if _save_planned_page(curr_url, content, relevant_docs_list):
+                            page_headings_map[curr_url] = headings
+                            return True
+                        else:
+                            thought("Page empty — skipping.", "info")
+                    except Exception as e:
+                        thought(f"Nav error: {e}", "info")
+                    return False
+
+                planned_urls: list[str] = []
+
+                if link_data:
+                    def _fmt_outline(links: list[dict]) -> str:
+                        lines = []
+                        for i, x in enumerate(links, 1):
+                            indent = "  " * min(x.get("depth", 0), 3)
+                            section = f"[{x['section']}] " if x.get("section") else ""
+                            lines.append(f"{indent}{i}. {section}{x['text']} → {x['href']}")
+                        return "\n".join(lines)
+
+                    outline = _fmt_outline(link_data)
+
+                    _HARD_SKIP = {"blog", "changelog", "status", "login", "signup",
+                                  "sign-up", "pricing", "careers", "release-notes",
+                                  "twitter", "github", "discord", "community", "support"}
+
+                    def _should_skip(href: str) -> bool:
+                        parts = href.lower().split("/")
+                        return any(s in parts for s in _HARD_SKIP)
+
+                    all_candidate_urls = [
+                        x["href"] for x in link_data
+                        if not _should_skip(x["href"]) and validate_url(x["href"])
+                    ]
+
+                    already_indexed_note = ""
+                    if docs_visited:
+                        already_indexed_note = (
+                            f"ALREADY INDEXED ({len(docs_visited)} pages from a previous run):\n"
+                            + "\n".join(f"  {u}" for u in sorted(docs_visited)[:40])
+                            + "\n\nFocus on sections NOT covered by these pages. "
+                            "EXCLUDE any outline entry whose URL matches an already-indexed page.\n\n"
+                        )
+
+                    rank_prompt = (
+                        f"USER QUERY: \"{user_query}\"\n"
+                        f"DOCS SITE: {page.url}\n\n"
+                        f"{already_indexed_note}"
+                        f"DOCUMENTATION OUTLINE (indentation = nesting depth):\n{outline[:4000]}\n\n"
+                        "Your task:\n"
+                        "1. RANK all documentation pages by relevance to the user's query (most relevant first).\n"
+                        "2. EXCLUDE pages that have NO reasonable connection to the query — where visiting them "
+                        "could not help answer it in any way. Be conservative: only exclude if very confident.\n"
+                        "   - ALWAYS exclude: Blog, Changelog, Release Notes, Status, Login, Pricing, Marketing.\n"
+                        "   - ALWAYS exclude: pages about unrelated product features (e.g. if user asks about "
+                        "hosting a static site, exclude AI/ML features, cron jobs, queues, bot management, etc.).\n"
+                        "   - EXCLUDE: any page already in the ALREADY INDEXED list above.\n"
+                        "   - KEEP borderline/tangential pages — missing a relevant page is worse than an extra visit.\n"
+                        "   - KEEP: Getting Started, Core Concepts, Deployment, CLI, Domains, Configuration, Builds.\n"
+                        "3. Reply ONLY with JSON — ranked indices FIRST:\n"
+                        '{"ranked":[3,1,7,2,...],"excluded":[15,23,41],"thought":"brief explanation"}'
+                    )
+
+                    def _call_rank():
                         res = gemini_client.models.generate_content(
                             model="gemini-2.5-flash",
-                            contents=plan_prompt,
+                            contents=rank_prompt,
                             config=genai_types.GenerateContentConfig(
                                 http_options=genai_types.HttpOptions(timeout=30000),
                             ),
                         )
                         plan = _parse_json(res.text)
-                        selected = plan.get("selected", [])
-                        planned_urls = [
-                            link_data[i - 1]["href"]
-                            for i in selected
-                            if isinstance(i, int) and 1 <= i <= len(link_data)
-                        ]
-                        thought(
-                            f"Plan: {plan.get('thought','')[:80]} — "
-                            f"{len(planned_urls)} sections queued.",
-                            "scanning",
-                        )
-                    except Exception as e:
-                        thought(f"Gemini plan failed ({e}) — using keyword scoring.", "info")
-                        planned_urls = _keyword_fallback(link_data, user_query)
-                        thought(
-                            f"Keyword plan: {len(planned_urls)} sections queued.",
-                            "scanning",
-                        )
-                else:
-                    thought("No nav links found on docs landing — proceeding to HITL.", "info")
+                        ranked_idxs = plan.get("ranked", [])
+                        excluded_idxs = set(plan.get("excluded", []))
+                        seen: set[int] = set()
+                        ordered: list[str] = []
+                        for i in ranked_idxs:
+                            if isinstance(i, int) and 1 <= i <= len(link_data) and i not in excluded_idxs:
+                                url = link_data[i - 1]["href"]
+                                if not _should_skip(url) and validate_url(url) and i not in seen:
+                                    seen.add(i)
+                                    ordered.append(url)
+                        for i, x in enumerate(link_data, 1):
+                            if i not in seen and i not in excluded_idxs:
+                                url = x["href"]
+                                if not _should_skip(url) and validate_url(url):
+                                    ordered.append(url)
+                        return ordered, plan.get("thought", "")
 
-                # ── Phase 2: execute plan ─────────────────────────────────────
-                for target_url in planned_urls:
+                    for _attempt in range(2):
+                        try:
+                            planned_urls, plan_thought = _call_rank()
+                            if planned_urls:
+                                thought(
+                                    f"Plan: {plan_thought[:100]} — {len(planned_urls)} sections queued.",
+                                    "scanning",
+                                )
+                                break
+                            if _attempt == 0:
+                                thought("Gemini returned no ranking — retrying...", "info")
+                            else:
+                                thought("No Gemini ranking — using all links in order.", "info")
+                                planned_urls = all_candidate_urls
+                                thought(f"Visiting all {len(planned_urls)} sections.", "scanning")
+                        except Exception as e:
+                            if _attempt == 0:
+                                thought(f"Rank error, retrying... ({e})", "info")
+                            else:
+                                thought("Rank failed — visiting all links in order.", "info")
+                                planned_urls = all_candidate_urls
+                                thought(f"Visiting all {len(planned_urls)} sections.", "scanning")
+                else:
+                    thought("No doc links found — nothing to visit.", "info")
+
+                _parsed_root = urlparse(page.url)
+                _docs_host   = _parsed_root.netloc
+                _docs_prefix = "/" + (_parsed_root.path.split("/")[1] if _parsed_root.path.count("/") >= 1 else "")
+
+                _PAGE_CAP = 50
+                visit_queue: list[str] = list(dict.fromkeys(planned_urls))[:_PAGE_CAP]
+                visit_queue_set: set[str] = set(visit_queue)
+                _done = 0
+
+                while visit_queue:
+                    target_url = visit_queue.pop(0)
                     if stop_event.is_set():
                         return
                     if not _pause_check():
                         return
                     if target_url in docs_visited:
                         continue
-                    if not validate_url(target_url):
-                        continue
+                    if _done >= _PAGE_CAP:
+                        break
+                    _done += 1
+                    _total = min(_done + len(visit_queue), _PAGE_CAP)
+                    thought_q.put({"type": "docs_progress", "current": _done, "total": _total})
+                    saved = _visit_planned(target_url)
+                    if saved:
+                        sub_links = _collect_article_subpages(_docs_host, _docs_prefix)
+                        for sl in sub_links:
+                            if sl not in docs_visited and sl not in visit_queue_set and _done + len(visit_queue) < _PAGE_CAP:
+                                visit_queue.append(sl)
+                                visit_queue_set.add(sl)
 
-                    thought(f"Visiting: {target_url.split('/')[-1] or target_url}", "navigating")
-                    try:
-                        page.goto(target_url, wait_until="domcontentloaded", timeout=14000)
-                        page.wait_for_timeout(1200)
-                        curr_url = page.url
-                        docs_visited.add(curr_url)
-                        visited_urls.append(curr_url)
-                        content = page.evaluate("() => document.body.innerText")
-                        if not _save_relevant_page(curr_url, content, relevant_docs_list):
-                            thought("Section not relevant — moving to next.", "info")
-                    except Exception as e:
-                        thought(f"Nav error: {e}", "info")
+                thought_q.put({"type": "docs_progress", "current": 0, "total": 0})  # clear bar
+
+                # final pass: check if there are important topics we missed
+                if relevant_docs_list and not stop_event.is_set() and link_data:
+                    unvisited = [
+                        x for x in link_data
+                        if x["href"] not in docs_visited
+                        and validate_url(x["href"])
+                    ]
+                    if unvisited:
+                        visited_summary = "\n".join(
+                            f"  • {url.split('/')[-1] or url}: {hdgs[:120]}"
+                            for url, hdgs in page_headings_map.items()
+                        )
+                        remaining_fmt = "\n".join(
+                            f"  {i+1}. {x['text']} → {x['href']}"
+                            for i, x in enumerate(unvisited[:40])
+                        )
+                        gap_prompt = (
+                            f"USER QUERY: \"{user_query}\"\n\n"
+                            f"PAGES ALREADY VISITED (with headings found):\n{visited_summary}\n\n"
+                            f"REMAINING UNVISITED SECTIONS:\n{remaining_fmt}\n\n"
+                            "Based on the user's query, are there important topics NOT yet covered "
+                            "by the visited pages? If so, which remaining sections should we visit next?\n"
+                            "If the visited pages fully cover the query, set sufficient=true.\n\n"
+                            'Reply ONLY with JSON:\n'
+                            '{"sufficient":false,"gaps":["missing topic"],"visit_next":[3,7],"thought":".."}'
+                        )
+                        try:
+                            gap_res = gemini_client.models.generate_content(
+                                model="gemini-2.5-flash",
+                                contents=gap_prompt,
+                                config=genai_types.GenerateContentConfig(
+                                    http_options=genai_types.HttpOptions(timeout=20000),
+                                ),
+                            )
+                            gap_plan = _parse_json(gap_res.text)
+                            if not gap_plan.get("sufficient", False):
+                                gap_idxs = gap_plan.get("visit_next", [])
+                                gap_urls = [
+                                    unvisited[i - 1]["href"]
+                                    for i in gap_idxs
+                                    if isinstance(i, int) and 1 <= i <= len(unvisited)
+                                ]
+                                gaps = gap_plan.get("gaps", [])
+                                if gaps:
+                                    thought(f"Coverage gaps: {', '.join(gaps[:3])} — visiting {len(gap_urls)} more pages.", "scanning")
+                                for gurl in gap_urls[:6]:
+                                    if stop_event.is_set():
+                                        break
+                                    if not _pause_check():
+                                        break
+                                    _visit_planned(gurl)
+                            else:
+                                thought("Coverage check: query fully covered.", "found")
+                        except Exception as e:
+                            thought(f"Coverage check skipped: {e}", "info")
 
                 if stop_event.is_set():
                     return
 
                 thought(
-                    f"Plan complete. Found {len(relevant_docs_list)} relevant section(s). "
-                    "You can type a section heading or URL below to dig deeper.",
+                    f"Docs search complete — {len(relevant_docs_list)} page(s) saved.",
                     "complete" if relevant_docs_list else "info",
                 )
 
-                # ── Phase 3: HITL for additional sections ─────────────────────
+                # Auto-finish if we collected relevant docs — no HITL needed
+                if relevant_docs_list:
+                    return
+
+                # HITL only if we found nothing — let the user point us somewhere
                 thought_q.put({
                     "type": "docs_hitl",
                     "prompt": (
-                        f"Finished planned sections. Found {len(relevant_docs_list)} relevant page(s). "
-                        f"Type a section heading or paste a URL to keep searching, or click 'finish'."
+                        f"Finished planned sections but found no relevant pages for your query. "
+                        f"Type a section heading or paste a URL to search manually, or click 'finish'."
                     ),
                 })
                 thought_q.put({"type": "auto_pause"})
@@ -754,17 +1138,26 @@ async def browse_websocket(
                         page.wait_for_timeout(300)
                         continue
 
+                    def _extract_after_nav(wait_ms: int = 1500) -> str:
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=1500)
+                        except Exception:
+                            page.wait_for_timeout(wait_ms)
+                        return page.evaluate("""() => {
+                            document.querySelectorAll('details:not([open])').forEach(d => d.setAttribute('open', ''));
+                            return document.body.innerText;
+                        }""")
+
                     # User gave a hint — navigate and survey
                     if hint.startswith("http"):
                         if validate_url(hint):
                             thought(f"Navigating to: {hint}", "navigating")
                             try:
                                 page.goto(hint, wait_until="domcontentloaded", timeout=12000)
-                                page.wait_for_timeout(1200)
                                 curr_url = page.url
                                 docs_visited.add(curr_url)
                                 visited_urls.append(curr_url)
-                                content = page.evaluate("() => document.body.innerText")
+                                content = _extract_after_nav()
                                 if not _save_relevant_page(curr_url, content, relevant_docs_list):
                                     thought("Page not relevant to query.", "info")
                             except Exception as e:
@@ -784,11 +1177,10 @@ async def browse_websocket(
                                     el.evaluate("el => el.scrollIntoView({behavior:'smooth',block:'center'})")
                                     page.wait_for_timeout(400)
                                     el.click(force=True)
-                                page.wait_for_timeout(1500)
                                 curr_url = page.url
                                 docs_visited.add(curr_url)
                                 visited_urls.append(curr_url)
-                                content = page.evaluate("() => document.body.innerText")
+                                content = _extract_after_nav(wait_ms=1500)
                                 if not _save_relevant_page(curr_url, content, relevant_docs_list):
                                     thought("Page not relevant to query.", "info")
                             except Exception as e:
@@ -832,8 +1224,9 @@ async def browse_websocket(
                             page.goto(
                                 t_url, wait_until="domcontentloaded", timeout=10000
                             )
-                            # If we were stuck waiting for a URL from the user, auto-resume
-                            if _stuck_pause:
+                            # Auto-resume after any manual URL navigation — user
+                            # pasting a URL is an implicit "continue from here"
+                            if not pause_event.is_set():
                                 _stuck_pause = False
                                 thought("URL received — resuming agent.", "info")
                                 pause_event.set()
@@ -1336,12 +1729,11 @@ async def browse_websocket(
 
                             page.wait_for_timeout(500)
 
-                        # Phase 2: docs search guided by user's query
-                        if objectives["pricing"] and not stop_event.is_set():
+                        # Docs first — pricing is picked up from within docs if it's there
+                        if not stop_event.is_set():
                             if not user_query:
-                                # query wasn't in the WS init — ask the user now (fallback)
                                 thought_q.put({"type": "query_prompt"})
-                                thought("Pricing collected. Waiting for your research question...", "info")
+                                thought("Waiting for your research question...", "info")
                                 while not stop_event.is_set():
                                     page.wait_for_timeout(300)
                                     pending = []
@@ -1362,24 +1754,80 @@ async def browse_websocket(
                                 query_guided_docs_search()
                                 objectives["docs"] = True
 
-                        # If loop exhausted and milestones incomplete, trigger HITL before closing
-                        if not objectives["pricing"] and not stop_event.is_set():
-                            _page_hint = "their Pricing or Plans page"
-                            missing_milestone = "pricing"
-                            thought(
-                                f"\u26a0 I've run out of steps and still couldn't find {_page_hint}. "
-                                f"Open {finishing_domain} in your own browser tab, go to {_page_hint} yourself, "
-                                "copy the full URL from your browser's address bar, paste it into the "
-                                "search bar above, and press Enter — I'll take over from there.",
-                                "hitl",
-                            )
-                            thought_q.put({"type": "stuck_guidance", "milestone": missing_milestone})
-                            thought_q.put({"type": "auto_pause"})
-                            pause_event.clear()
-                            _stuck_pause = True
-                            # Wait for user to paste URL before closing browser
-                            while not stop_event.is_set():
-                                page.wait_for_timeout(500)
+                        # Pricing fallback — only if no pricing extract was saved yet
+                        pricing_dir = EXTRACTS_DIR / finishing_domain
+                        has_pricing = any(pricing_dir.glob("pricing_*.txt")) if pricing_dir.exists() else False
+                        if not has_pricing and not stop_event.is_set():
+                            thought("No pricing found in docs — browsing pricing page.", "navigating")
+                            objectives["pricing"] = False
+                            for step in range(40):
+                                if stop_event.is_set() or objectives["pricing"]:
+                                    break
+                                was_paused = not pause_event.is_set()
+                                while not pause_event.is_set():
+                                    handle_gestures(page)
+                                    if stop_event.is_set():
+                                        break
+                                    page.wait_for_timeout(100)
+                                if stop_event.is_set():
+                                    break
+                                handle_gestures(page)
+                                curr_url   = page.url
+                                curr_lower = curr_url.lower()
+                                _PRICING_URL     = ["pricing", "plans", "plan", "price"]
+                                _PRICING_CONTENT = ["pricing", "plans", "per month", "per seat", "free tier", "enterprise"]
+                                try:
+                                    _page_title = page.title().lower()
+                                    _page_h1    = page.evaluate(
+                                        "() => (document.querySelector('h1') || {innerText:''}).innerText"
+                                    ).lower()
+                                except Exception:
+                                    _page_title = _page_h1 = ""
+                                if (
+                                    any(k in curr_lower for k in _PRICING_URL)
+                                    or any(k in _page_title for k in _PRICING_CONTENT)
+                                    or any(k in _page_h1 for k in _PRICING_CONTENT)
+                                ):
+                                    thought("Pricing page found — extracting.", "found")
+                                    page.wait_for_timeout(800)
+                                    content = full_page_extract(page)
+                                    save_intel("pricing", curr_url, content)
+                                    save_extract(finishing_domain, "pricing", curr_url, content)
+                                    thought(f"Pricing saved ({len(content):,} chars).", "found")
+                                    objectives["pricing"] = True
+                                    break
+                                try:
+                                    content  = page.evaluate("() => document.body.innerText")
+                                    headings = page.evaluate(
+                                        "() => Array.from(document.querySelectorAll('h1,h2,h3,nav a,header a,footer a,[role=navigation] a'))"
+                                        ".map(e => e.innerText.trim()).filter(Boolean).join(' | ')"
+                                    )
+                                    try:
+                                        shot = page.screenshot(type="jpeg", quality=60)
+                                    except Exception:
+                                        shot = None
+                                    decision = ask_brain(curr_url, content, headings, shot, {})
+                                    goal  = decision.get("goal")
+                                    label = decision.get("target", "")
+                                    thought(decision.get("thought", ""), "navigating")
+                                    if goal in ["CLICK", "HOVER"] and label:
+                                        el, matched = find_element(page, [label])
+                                        if el:
+                                            thought(f"Targeting: {matched}", "clicking")
+                                            el.hover(force=True)
+                                            if goal == "CLICK":
+                                                el.evaluate("el => el.setAttribute('target','_self')")
+                                                try:
+                                                    el.click(force=True, timeout=3000)
+                                                except Exception:
+                                                    el.evaluate("el => el.click()")
+                                            page.wait_for_timeout(1500)
+                                    elif goal == "SCROLL":
+                                        page.evaluate("window.scrollBy(0, 600)")
+                                        page.wait_for_timeout(500)
+                                except Exception as e:
+                                    thought(f"Pricing nav error: {e}", "info")
+                                page.wait_for_timeout(400)
 
                         try:
                             ctx.close()

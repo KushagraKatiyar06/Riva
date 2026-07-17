@@ -88,7 +88,7 @@ async def pipeline_websocket(
 
         vectorized: set[str] = set()
 
-        def _vectorize_domain(domain: str):
+        def _vectorize_domain(domain: str, mark_complete: bool = True):
             if not CF_ACCOUNT_ID or not CF_API_TOKEN:
                 log("Cloudflare credentials missing — skipping vectorization.", "error")
                 vectorized.add(domain)
@@ -165,8 +165,7 @@ async def pipeline_websocket(
 
             _save_vec_cache(domain_dir, cache)
 
-            # only mark complete if every file succeeded - partial success means we should re-run
-            if not errored and not hit_limit and not stop_evt.is_set():
+            if mark_complete and not errored and not hit_limit and not stop_evt.is_set():
                 _mark_domain_complete(domain_dir)
 
             parts = [f"{total} new vectors"]
@@ -174,8 +173,9 @@ async def pipeline_websocket(
                 parts.append(f"{skipped} unchanged (skipped)")
             if errored:
                 parts.append(f"{errored} FAILED")
-            log(f"  {domain} complete — {', '.join(parts)}.", "error" if errored else "success")
-            vectorized.add(domain)
+            log(f"  {domain} {'indexed' if not mark_complete else 'complete'} — {', '.join(parts)}.", "error" if errored else "success")
+            if mark_complete:
+                vectorized.add(domain)
 
         if getattr(sess, "cancelled", False):
             out_q.put({"__done__": True})
@@ -196,7 +196,19 @@ async def pipeline_websocket(
             log("Pipeline active — will vectorize each domain as agents complete.", "info")
             out_q.put({"type": "status", "value": "vectorizing"})
             deadline = time.time() + 600  # 10-min overall cap
+            early_done: set[str] = set()  # domains that had an early vectorization pass
             while time.time() < deadline and not stop_evt.is_set():
+                # early pass: start indexing after 5 pages, don't mark complete yet
+                try:
+                    domain = sess.partial_q.get_nowait()
+                    if domain not in early_done:
+                        early_done.add(domain)
+                        log(f"Early indexing started for {domain}.", "success")
+                        _vectorize_domain(domain, mark_complete=False)
+                    continue
+                except tqueue.Empty:
+                    pass
+                # final pass: browser finished, index any remaining files
                 try:
                     domain = sess.ready_q.get(timeout=2)
                 except tqueue.Empty:
@@ -205,7 +217,7 @@ async def pipeline_websocket(
                     continue
                 if domain in vectorized:
                     continue
-                log(f"Agent finished for {domain} — starting vectorization.", "success")
+                log(f"Agent finished for {domain} — indexing remaining files.", "success")
                 _vectorize_domain(domain)
 
         all_domains = list(vectorized) or list(sess.domains)

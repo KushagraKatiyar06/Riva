@@ -23,9 +23,17 @@ class _Session:
         self.completed  = 0
         self.cancelled  = False
         self.domains:   list[str] = []
-        self.ready_q    = tqueue.Queue()   # domains ready for vectorization
+        self.ready_q    = tqueue.Queue()   # domains ready for final vectorization
+        self.partial_q  = tqueue.Queue()   # domains ready for early vectorization
         self.done_event = threading.Event()
         self._lock      = threading.Lock()
+        self._early_signalled: set[str] = set()
+
+    def signal_early(self, domain: str):
+        with self._lock:
+            if domain not in self._early_signalled:
+                self._early_signalled.add(domain)
+                self.partial_q.put(domain)
 
     def mark_complete(self, domain: str):
         with self._lock:
